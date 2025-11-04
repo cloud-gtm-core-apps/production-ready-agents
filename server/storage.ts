@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Order, type InsertOrder, type OrderConversation, type InsertOrderConversation, type MenuItem, type InsertMenuItem, type Message, users, orders, orderConversations, menuItems } from "@shared/schema";
+import { type User, type InsertUser, type Order, type InsertOrder, type OrderConversation, type InsertOrderConversation, type MenuItem, type InsertMenuItem, type Customer, type InsertCustomer, type OrderHistory, type InsertOrderHistory, type CustomerStats, type InsertCustomerStats, type Message, users, orders, orderConversations, menuItems, customers, orderHistory, customerStats } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, ne } from "drizzle-orm";
 
@@ -27,6 +27,14 @@ export interface IStorage {
   createMenuItem(userId: string, item: InsertMenuItem): Promise<MenuItem>;
   updateMenuItem(userId: string, itemId: string, item: Partial<InsertMenuItem>): Promise<MenuItem>;
   deleteMenuItem(userId: string, itemId: string): Promise<void>;
+  updateOrderStatus(orderId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<void>;
+  updateOrderDetails(orderId: string, updates: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date }): Promise<void>;
+  getCustomerByPhoneNumber(userId: string, phoneNumber: string): Promise<Customer | undefined>;
+  createCustomer(userId: string, customer: InsertCustomer): Promise<Customer>;
+  getCustomerStats(customerId: string): Promise<CustomerStats | undefined>;
+  createCustomerStats(customerId: string, stats: InsertCustomerStats): Promise<CustomerStats>;
+  updateCustomerStats(customerId: string, stats: Partial<InsertCustomerStats>): Promise<void>;
+  createOrderHistory(history: InsertOrderHistory): Promise<OrderHistory>;
 }
 
 export class DbStorage implements IStorage {
@@ -284,6 +292,64 @@ export class DbStorage implements IStorage {
     if (!result[0]) {
       throw new Error('Menu item not found');
     }
+  }
+
+  async updateOrderStatus(orderId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<void> {
+    await db.update(orders)
+      .set({ status })
+      .where(eq(orders.id, orderId));
+  }
+
+  async updateOrderDetails(orderId: string, updates: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date }): Promise<void> {
+    await db.update(orders)
+      .set(updates)
+      .where(eq(orders.id, orderId));
+  }
+
+  async getCustomerByPhoneNumber(userId: string, phoneNumber: string): Promise<Customer | undefined> {
+    const result = await db.select()
+      .from(customers)
+      .where(and(
+        eq(customers.userId, userId),
+        eq(customers.phoneNumber, phoneNumber)
+      ))
+      .limit(1);
+    return result[0];
+  }
+
+  async createCustomer(userId: string, customer: InsertCustomer): Promise<Customer> {
+    const result = await db.insert(customers)
+      .values({ ...customer, userId })
+      .returning();
+    return result[0];
+  }
+
+  async getCustomerStats(customerId: string): Promise<CustomerStats | undefined> {
+    const result = await db.select()
+      .from(customerStats)
+      .where(eq(customerStats.customerId, customerId))
+      .limit(1);
+    return result[0];
+  }
+
+  async createCustomerStats(customerId: string, stats: InsertCustomerStats): Promise<CustomerStats> {
+    const result = await db.insert(customerStats)
+      .values({ ...stats, customerId })
+      .returning();
+    return result[0];
+  }
+
+  async updateCustomerStats(customerId: string, stats: Partial<InsertCustomerStats>): Promise<void> {
+    await db.update(customerStats)
+      .set(stats)
+      .where(eq(customerStats.customerId, customerId));
+  }
+
+  async createOrderHistory(history: InsertOrderHistory): Promise<OrderHistory> {
+    const result = await db.insert(orderHistory)
+      .values(history)
+      .returning();
+    return result[0];
   }
 }
 

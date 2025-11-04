@@ -34,6 +34,10 @@ export default function ConversationView({
 }: ConversationViewProps) {
   const [messageInput, setMessageInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [autoStartEditing, setAutoStartEditing] = useState(false);
+  const [aiItems, setAiItems] = useState<string[] | undefined>(undefined);
+  const [aiNotes, setAiNotes] = useState<string | undefined>(undefined);
+  const [aiPickupTime, setAiPickupTime] = useState<string | undefined>(undefined);
   const displayName = conversation.customerName || conversation.phoneNumber;
   
   // Scroll to bottom when conversation opens or messages change
@@ -70,9 +74,6 @@ export default function ConversationView({
     setMessageInput(template);
   };
 
-  const handleSaveOrder = (updatedDetails: OrderDetails) => {
-    onUpdateOrder?.(conversation.id, updatedDetails);
-  };
 
   const handleUseSuggestion = (text: string) => {
     setMessageInput(text);
@@ -83,6 +84,101 @@ export default function ConversationView({
       onSendMessage(conversation.id, messageInput.trim());
       setMessageInput('');
     }
+  };
+
+  // Parse AI organized message to extract items, notes, and pickup time
+  const parseAIMessage = (messageText: string) => {
+    const lines = messageText.split('\n');
+    const items: string[] = [];
+    let notes = '';
+    let pickupTime = '';
+    let foundCustomer = false;
+    let foundPickupTime = false;
+    let collectingNotes = false;
+    const notesLines: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      
+      if (!trimmed) {
+        // Empty line - might indicate transition from items to notes
+        if (foundCustomer && items.length > 0 && !foundPickupTime) {
+          collectingNotes = true;
+        }
+        continue;
+      }
+      
+      // Skip customer name line
+      if (trimmed.toLowerCase().startsWith('customer:')) {
+        foundCustomer = true;
+        continue;
+      }
+      
+      // Check for pickup time
+      if (trimmed.toLowerCase().includes('pickup time:')) {
+        const match = trimmed.match(/pickup time:\s*(.+)/i);
+        if (match) {
+          pickupTime = match[1].trim();
+        }
+        foundPickupTime = true;
+        collectingNotes = false;
+        continue;
+      }
+      
+      // If we've found customer
+      if (foundCustomer) {
+        // Check if it's an item (contains price pattern or quantity pattern)
+        const hasPrice = trimmed.includes(':$') || trimmed.match(/:\s*\$[\d.]+/);
+        const hasQuantity = trimmed.match(/^\d+x\s/i);
+        
+        if (hasPrice || hasQuantity) {
+          // It's an item
+          items.push(trimmed);
+          collectingNotes = false;
+        } else if (collectingNotes || (items.length > 0 && !foundPickupTime)) {
+          // Likely notes - collect until we find pickup time or end
+          if (!foundPickupTime) {
+            notesLines.push(trimmed);
+          }
+        } else if (items.length === 0 && !trimmed.toLowerCase().includes('customer')) {
+          // Could be first item without price, or notes before items
+          // If it's short and looks like an item name, treat as item
+          if (trimmed.length < 50 && !trimmed.includes('\n')) {
+            items.push(trimmed);
+          } else {
+            notesLines.push(trimmed);
+          }
+        }
+      }
+    }
+
+    notes = notesLines.join('\n').trim();
+
+    return { items, notes, pickupTime };
+  };
+
+  const handleConfirmOrder = () => {
+    // Find AI organized message
+    const aiMessage = conversation.messages.find(msg => msg.isAIOrganized === true);
+    
+    if (aiMessage) {
+      // Parse AI message to extract items, notes, and pickup time
+      const parsed = parseAIMessage(aiMessage.text);
+      setAiItems(parsed.items.length > 0 ? parsed.items : undefined);
+      setAiNotes(parsed.notes || undefined);
+      setAiPickupTime(parsed.pickupTime || undefined);
+    }
+    
+    // Expand and start editing (don't call onConfirmOrder yet - that will happen on save)
+    setAutoStartEditing(true);
+  };
+
+  const handleSaveOrder = (updatedDetails: OrderDetails) => {
+    // Save the order details (don't navigate away)
+    onUpdateOrder?.(conversation.id, updatedDetails);
+    
+    // Reset auto-start editing state after save
+    setAutoStartEditing(false);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -174,12 +270,37 @@ export default function ConversationView({
             orderStatus={conversation.orderStatus}
             detectedPickupTime={detectedPickupTime}
             onSave={handleSaveOrder}
+            autoStartEditing={autoStartEditing}
+            itemsFromAI={aiItems}
+            notesFromAI={aiNotes}
+            pickupTimeFromAI={aiPickupTime}
           />
           
-          {conversation.orderStatus === 'new' && onConfirmOrder && (
+          {conversation.orderStatus === 'new' && onConfirmOrder && onDeleteOrder && (
+            <div className="flex gap-2 mt-3">
+              <Button
+                variant="destructive"
+                className="flex-1"
+                onClick={() => onDeleteOrder(conversation.id)}
+                data-testid="button-delete-order"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Order
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={handleConfirmOrder}
+                data-testid="button-confirm-order"
+              >
+                Confirm Order
+              </Button>
+            </div>
+          )}
+
+          {conversation.orderStatus === 'new' && onConfirmOrder && !onDeleteOrder && (
             <Button
               className="w-full mt-3"
-              onClick={() => onConfirmOrder(conversation.id)}
+              onClick={handleConfirmOrder}
               data-testid="button-confirm-order"
             >
               Confirm Order
@@ -196,7 +317,7 @@ export default function ConversationView({
             </Button>
           )}
 
-          {onDeleteOrder && (
+          {onDeleteOrder && conversation.orderStatus !== 'new' && (
             <Button
               variant="destructive"
               className="w-full mt-3"

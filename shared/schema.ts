@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, pgEnum, jsonb, integer, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -81,9 +81,41 @@ export const menuItems = pgTable("menu_items", {
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
 
+// Customers table
+export const customers = pgTable("customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  phoneNumber: text("phone_number").notNull().unique(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+// Order history table
+export const orderHistory = pgTable("order_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  orderSummary: jsonb("order_summary"),
+  notes: text("notes"),
+  status: orderStatusEnum("status"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+// Customer stats table
+export const customerStats = pgTable("customer_stats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().unique().references(() => customers.id),
+  totalOrders: integer("total_orders").default(0),
+  lastOrderDate: timestamp("last_order_date"),
+  totalSpent: numeric("total_spent", { precision: 10, scale: 2 }).default("0.00"),
+});
+
 export const insertOrderSchema = createInsertSchema(orders);
 export const insertOrderConversationSchema = createInsertSchema(orderConversations);
 export const insertMenuItemSchema = createInsertSchema(menuItems);
+export const insertCustomerSchema = createInsertSchema(customers);
+export const insertOrderHistorySchema = createInsertSchema(orderHistory);
+export const insertCustomerStatsSchema = createInsertSchema(customerStats);
 
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
@@ -91,6 +123,12 @@ export type OrderConversation = typeof orderConversations.$inferSelect;
 export type InsertOrderConversation = z.infer<typeof insertOrderConversationSchema>;
 export type MenuItem = typeof menuItems.$inferSelect;
 export type InsertMenuItem = z.infer<typeof insertMenuItemSchema>;
+export type Customer = typeof customers.$inferSelect;
+export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
+export type OrderHistory = typeof orderHistory.$inferSelect;
+export type InsertOrderHistory = z.infer<typeof insertOrderHistorySchema>;
+export type CustomerStats = typeof customerStats.$inferSelect;
+export type InsertCustomerStats = z.infer<typeof insertCustomerStatsSchema>;
 
 // Message conversation types for in-memory storage
 export const messageSchema = z.object({

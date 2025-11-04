@@ -32,6 +32,36 @@ export default function MessageList({ conversations, onSelectConversation, onOpe
     });
   };
 
+  const formatPickupTime = (timeStr: string | null | undefined): string | null => {
+    if (!timeStr) return null;
+    
+    // If it's already formatted (contains AM/PM), normalize it
+    const timeMatch = timeStr.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1]);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const period = timeMatch[3].toUpperCase();
+      
+      // Handle formats like "5pm" -> "5:00 PM"
+      const formatted = `${hours}:${minutes.toString().padStart(2, '0')} ${period}`;
+      return formatted;
+    }
+    
+    // If it's an ISO string, convert it
+    try {
+      const date = new Date(timeStr);
+      if (isNaN(date.getTime())) return null;
+      const hours = date.getHours();
+      const minutes = date.getMinutes();
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const hours12 = hours % 12 || 12;
+      return `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+    } catch {
+      // If it's not an ISO string and doesn't match the pattern, return as is
+      return timeStr;
+    }
+  };
+
   const isUrgent = (conversation: Conversation) => {
     if (conversation.orderStatus === 'new') return false;
     if (!conversation.orderDetails?.pickupTimestamp) return false;
@@ -187,15 +217,15 @@ export default function MessageList({ conversations, onSelectConversation, onOpe
                   
                   {conversation.orderDetails && (
                     <div className="flex items-center justify-between gap-3 mt-2">
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-foreground">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <span className="text-sm font-medium text-foreground flex-shrink-0">
                           ${conversation.orderDetails.total}
                         </span>
                         {(conversation.orderStatus === 'confirmed' || conversation.orderStatus === 'ready') && (
                           <>
-                            <span className="text-xs text-muted-foreground">•</span>
-                            <span className="text-sm font-medium text-primary">
-                              Pickup: {conversation.orderDetails.pickupTime}
+                            <span className="text-xs text-muted-foreground flex-shrink-0">•</span>
+                            <span className="text-[11px] font-medium text-primary whitespace-nowrap">
+                              Pickup: {formatPickupTime(conversation.orderDetails.pickupTime) || 'Not set'}
                             </span>
                           </>
                         )}
@@ -221,10 +251,10 @@ export default function MessageList({ conversations, onSelectConversation, onOpe
                             e.stopPropagation();
                             onMarkPickedUp(conversation.id);
                           }}
-                          className="flex-shrink-0 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-md"
+                          className="flex-shrink-0 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-md text-[11px] h-7 px-1.5"
                           data-testid={`button-mark-picked-up-${conversation.id}`}
                         >
-                          <Check className="w-4 h-4 mr-1.5" />
+                          <Check className="w-3 h-3 mr-0.5" />
                           Mark Picked Up
                         </Button>
                       )}

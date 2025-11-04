@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Minus, X, Edit2, Save, XCircle, ChevronDown } from 'lucide-react';
+import { Plus, Minus, X, Edit2, ArrowRight, XCircle, ChevronDown } from 'lucide-react';
 import type { OrderDetails } from '@shared/schema';
 
 interface EditableOrderSummaryProps {
@@ -12,6 +12,10 @@ interface EditableOrderSummaryProps {
   orderStatus: 'new' | 'confirmed' | 'ready' | 'completed';
   detectedPickupTime?: string;
   onSave?: (updatedDetails: OrderDetails) => void;
+  autoStartEditing?: boolean;
+  itemsFromAI?: string[];
+  notesFromAI?: string;
+  pickupTimeFromAI?: string;
 }
 
 interface EditableItem {
@@ -24,10 +28,13 @@ export default function EditableOrderSummary({
   orderDetails, 
   orderStatus,
   detectedPickupTime,
-  onSave 
+  onSave,
+  autoStartEditing = false,
+  itemsFromAI,
+  notesFromAI,
+  pickupTimeFromAI
 }: EditableOrderSummaryProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [editedItems, setEditedItems] = useState<EditableItem[]>([]);
   const [editedNotes, setEditedNotes] = useState(orderDetails.notes || '');
   
@@ -77,15 +84,55 @@ export default function EditableOrderSummary({
     }
   }, [detectedPickupTime]);
 
+  // Handle auto-start editing
+  useEffect(() => {
+    if (autoStartEditing) {
+      // Use AI data if available, otherwise use orderDetails
+      const itemsToUse = itemsFromAI && itemsFromAI.length > 0 ? itemsFromAI : orderDetails.items;
+      const notesToUse = notesFromAI !== undefined ? notesFromAI : (orderDetails.notes || '');
+      const pickupTimeToUse = pickupTimeFromAI || detectedPickupTime || formatPickupTime(orderDetails.pickupTime);
+      
+      setEditedItems(parseItems(itemsToUse));
+      setEditedNotes(notesToUse);
+      setEditedPickupTime(pickupTimeToUse || (() => {
+        const future = new Date(Date.now() + 15 * 60 * 1000);
+        let hours = future.getHours();
+        let minutes = Math.round(future.getMinutes() / 5) * 5;
+        if (minutes >= 60) {
+          minutes = 0;
+          hours = (hours + 1) % 24;
+        }
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        const hours12 = hours % 12 || 12;
+        return `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      })());
+      setIsEditing(true);
+    }
+  }, [autoStartEditing, itemsFromAI, notesFromAI, pickupTimeFromAI, detectedPickupTime, orderDetails]);
+
   const parseItems = (items: string[]): EditableItem[] => {
     return items.map(item => {
-      const match = item.match(/(.+?)\s*(?:x(\d+))?$/);
-      if (match) {
-        const name = match[1].trim();
-        const quantity = match[2] ? parseInt(match[2]) : 1;
-        return { name, quantity, price: 12.99 };
+      // Handle formats like "Item: $3.50" or "2x Item: $7.00" or "Item" or "2x Item"
+      // Try to match price first
+      const priceMatch = item.match(/:\s*\$([\d.]+)/);
+      let totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+      
+      // Remove price from item string for further parsing
+      const itemWithoutPrice = item.replace(/:\s*\$[\d.]+/, '').trim();
+      
+      // Try to match quantity
+      const quantityMatch = itemWithoutPrice.match(/^(\d+)x\s*(.+)$/i);
+      if (quantityMatch) {
+        const quantity = parseInt(quantityMatch[1]);
+        const name = quantityMatch[2].trim();
+        // If we have a total price, divide by quantity to get per-item price
+        const pricePerItem = totalPrice !== null ? totalPrice / quantity : 12.99;
+        return { name, quantity, price: pricePerItem };
       }
-      return { name: item, quantity: 1, price: 12.99 };
+      
+      // No quantity, just item name
+      const pricePerItem = totalPrice !== null ? totalPrice : 12.99;
+      return { name: itemWithoutPrice, quantity: 1, price: pricePerItem };
     });
   };
 
@@ -158,17 +205,11 @@ export default function EditableOrderSummary({
   if (!isEditing) {
     return (
       <Card className="bg-card border-2 border-border">
-        <div className="flex items-center justify-between p-4 pb-3">
+        <div className="flex items-center justify-between p-4 pb-2">
           <div className="flex items-center gap-2">
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => setIsCollapsed(!isCollapsed)}
-              className="h-6 w-6"
-              data-testid="button-toggle-collapse"
-            >
-              <ChevronDown className={`w-4 h-4 transition-transform ${isCollapsed ? '-rotate-90' : ''}`} />
-            </Button>
+            <div className="h-6 w-6 flex items-center justify-center">
+              <ChevronDown className="w-4 h-4" />
+            </div>
             <h3 className="font-semibold text-sm text-foreground">Order Summary</h3>
           </div>
           <div className="flex items-center gap-2">
@@ -195,55 +236,44 @@ export default function EditableOrderSummary({
           </div>
         </div>
         
-        {isCollapsed ? (
-          <div className="px-4 pb-4">
-            <p className="text-sm text-muted-foreground" data-testid="text-collapsed-summary">
-              {orderDetails.items.length} {orderDetails.items.length === 1 ? 'item' : 'items'} • ${orderDetails.total}
-              {(detectedPickupTime || orderDetails.pickupTime) && ` • ${formatPickupTime(detectedPickupTime || orderDetails.pickupTime)}`}
+        <div className="px-4 pb-2">
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Pickup Time</p>
+              <p className="text-xs font-medium" data-testid="text-pickup-time">
+                {(() => {
+                  // Prioritize detected pickup time, then saved pickup time
+                  const timeToShow = detectedPickupTime || orderDetails.pickupTime;
+                  if (!timeToShow) return 'Not set';
+                  const formatted = formatPickupTime(timeToShow);
+                  return formatted || timeToShow; // Fallback to original if formatting fails
+                })()}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Total</p>
+              <p className="text-xs font-medium" data-testid="text-total">
+                ${orderDetails.total}
+              </p>
+            </div>
+          </div>
+        </div>
+        
+        <div className="space-y-2 px-4 mb-3">
+          {orderDetails.items.map((item, index) => (
+            <div key={index} className="text-sm text-foreground" data-testid={`text-item-${index}`}>
+              • {item}
+            </div>
+          ))}
+        </div>
+
+        {orderDetails.notes && (
+          <div className="mx-4 mb-3 p-2 bg-muted/50 rounded">
+            <p className="text-xs text-muted-foreground mb-1">Notes:</p>
+            <p className="text-sm text-foreground" data-testid="text-notes">
+              {orderDetails.notes}
             </p>
           </div>
-        ) : (
-          <>
-            <div className="space-y-2 px-4 mb-3">
-              {orderDetails.items.map((item, index) => (
-                <div key={index} className="text-sm text-foreground" data-testid={`text-item-${index}`}>
-                  • {item}
-                </div>
-              ))}
-            </div>
-
-            {orderDetails.notes && (
-              <div className="mx-4 mb-3 p-2 bg-muted/50 rounded">
-                <p className="text-xs text-muted-foreground mb-1">Notes:</p>
-                <p className="text-sm text-foreground" data-testid="text-notes">
-                  {orderDetails.notes}
-                </p>
-              </div>
-            )}
-            
-            <div className="flex items-center justify-between px-4 pb-4 pt-3 border-t mx-4">
-              <div className="flex items-center gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">Pickup Time</p>
-                  <p className="text-sm font-medium" data-testid="text-pickup-time">
-                    {(() => {
-                      // Prioritize detected pickup time, then saved pickup time
-                      const timeToShow = detectedPickupTime || orderDetails.pickupTime;
-                      if (!timeToShow) return 'Not set';
-                      const formatted = formatPickupTime(timeToShow);
-                      return formatted || timeToShow; // Fallback to original if formatting fails
-                    })()}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Total</p>
-                  <p className="text-sm font-medium" data-testid="text-total">
-                    ${orderDetails.total}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </>
         )}
       </Card>
     );
@@ -251,11 +281,28 @@ export default function EditableOrderSummary({
 
   return (
     <Card className="p-4 bg-card border-2 border-border">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-2">
         <h3 className="font-semibold text-sm text-foreground">Edit Order</h3>
         <Badge variant="secondary" data-testid="badge-editing">
           EDITING
         </Badge>
+      </div>
+
+      <div className="px-0 pb-2 mb-3">
+        <div className="flex items-center gap-4">
+          <div>
+            <p className="text-[10px] text-muted-foreground">Pickup Time</p>
+            <p className="text-xs font-medium text-primary" data-testid="text-edited-pickup">
+              {editedPickupTime}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] text-muted-foreground">New Total</p>
+            <p className="text-xs font-medium" data-testid="text-edited-total">
+              ${calculateTotal(editedItems)}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-3 mb-4">
@@ -370,23 +417,6 @@ export default function EditableOrderSummary({
         />
       </div>
 
-      <div className="flex items-center justify-between mb-4 pt-3 border-t">
-        <div className="flex items-center gap-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Pickup Time</p>
-            <p className="text-sm font-medium text-primary" data-testid="text-edited-pickup">
-              {editedPickupTime}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">New Total</p>
-            <p className="text-sm font-medium" data-testid="text-edited-total">
-              ${calculateTotal(editedItems)}
-            </p>
-          </div>
-        </div>
-      </div>
-
       <div className="flex gap-2">
         <Button
           variant="outline"
@@ -403,8 +433,8 @@ export default function EditableOrderSummary({
           disabled={editedItems.length === 0}
           data-testid="button-save-edit"
         >
-          <Save className="w-4 h-4 mr-2" />
-          Save Changes
+          Send To Preparation
+          <ArrowRight className="w-4 h-4" />
         </Button>
       </div>
     </Card>

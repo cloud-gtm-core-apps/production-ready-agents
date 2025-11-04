@@ -55,6 +55,11 @@ export default function Home() {
     }
   }, [conversationsError, conversations, activeTab]);
 
+  // Clear viewing conversation when tab changes
+  useEffect(() => {
+    setViewingConversationId(null);
+  }, [activeTab]);
+
   // Fetch counts for all tabs (no cache)
   const { data: counts, refetch: refetchCounts } = useQuery<{ new: number; confirmed: number; ready: number; completed: number }>({
     queryKey: ['/api/orders/counts'],
@@ -94,9 +99,34 @@ export default function Home() {
     setViewingConversationId(null);
   };
 
-  const handleUpdateOrder = (conversationId: string, orderDetails: any) => {
-    // TODO: Call API to update order details
-    console.log('Update order:', conversationId, orderDetails);
+  const handleUpdateOrder = async (conversationId: string, orderDetails: any) => {
+    try {
+      // Call API to send order to preparation
+      const response = await fetch(`/api/orders/${conversationId}/send-to-preparation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderDetails }),
+      });
+
+      if (response.ok) {
+        // Immediately remove from cache and refetch to get fresh data
+        queryClient.removeQueries({ queryKey: ['/api/orders', activeTab] });
+        queryClient.removeQueries({ queryKey: ['/api/orders/counts'] });
+        
+        // Force immediate refetch
+        await Promise.all([
+          refetchConversations(),
+          refetchCounts(),
+        ]);
+      } else {
+        const error = await response.json();
+        console.error('Failed to send order to preparation:', error.message || 'Unknown error');
+        alert(error.message || 'Failed to send order to preparation. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error sending order to preparation:', error);
+      alert('Failed to send order to preparation. Please try again.');
+    }
   };
 
   const handleDeleteOrder = async (conversationId: string) => {

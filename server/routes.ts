@@ -28,6 +28,45 @@ const openai = new OpenAI({
 // Store conversation contexts for AI conversations
 const aiConversationContexts = new Map<string, Array<{ role: 'system' | 'user' | 'assistant', content: string }>>();
 
+// Cache for menu items with expiration (1 day)
+interface MenuItemCache {
+  items: Array<{ name: string; price: string; category: string | null }>;
+  expiresAt: number;
+}
+const menuItemsCache = new Map<string, MenuItemCache>();
+
+// Helper function to get menu items with caching (1 day cache)
+async function getMenuItemsWithCache(userId: string): Promise<Array<{ name: string; price: string; category: string | null }>> {
+  const cached = menuItemsCache.get(userId);
+  const now = Date.now();
+
+  // Check if cache exists and is still valid (1 day = 24 * 60 * 60 * 1000 ms)
+  if (cached && cached.expiresAt > now) {
+    console.log(`[Menu Cache] Using cached menu items for userId ${userId}`);
+    return cached.items;
+  }
+
+  // Fetch fresh menu items from database
+  console.log(`[Menu Cache] Fetching fresh menu items for userId ${userId}`);
+  const menuItems = await storage.getMenuItems(userId);
+
+  // Format for cache (only include needed fields)
+  const formattedItems = menuItems.map(item => ({
+    name: item.name,
+    price: item.price,
+    category: item.category
+  }));
+
+  // Cache for 1 day
+  const expiresAt = now + (24 * 60 * 60 * 1000);
+  menuItemsCache.set(userId, {
+    items: formattedItems,
+    expiresAt
+  });
+
+  return formattedItems;
+}
+
 // Helper function to convert relative time strings to absolute times
 function convertRelativeTimeToAbsolute(timeStr: string, baseTime: Date = new Date()): string | null {
   const normalized = timeStr.toLowerCase().trim();
@@ -78,7 +117,8 @@ function convertRelativeTimeToAbsolute(timeStr: string, baseTime: Date = new Dat
 // Function to analyze conversation and detect if an order has been made
 async function analyzeOrderFromConversation(
   messages: Message[],
-  customerName?: string
+  customerName?: string,
+  menuItems?: Array<{ name: string; price: string; category: string | null }>
 ): Promise<{ orderMade: boolean; orderDetails?: { customerName: string; items: string[]; pickupTime?: string; notes?: string } }> {
   // Format conversation for AI analysis
   const conversationText = messages.map(msg => {
@@ -94,13 +134,40 @@ async function analyzeOrderFromConversation(
     hour12: true
   });
 
+  // Build menu context if menu items are provided
+  let menuContext = '';
+  if (menuItems && menuItems.length > 0) {
+    // Group by category for better organization
+    const byCategory = menuItems.reduce((acc, item) => {
+      const category = item.category || 'Other';
+      if (!acc[category]) acc[category] = [];
+      acc[category].push(item);
+      return acc;
+    }, {} as Record<string, Array<{ name: string; price: string }>>);
+
+    menuContext = '\n\nMENU ITEMS (use this to accurately identify and correlate items mentioned in the conversation):\n';
+    Object.entries(byCategory).forEach(([category, items]) => {
+      menuContext += `\n${category}:\n`;
+      items.forEach(item => {
+        menuContext += `  - ${item.name}: ${item.price}\n`;
+      });
+    });
+    menuContext += '\nWhen extracting items from the conversation, match them to the menu items above. Use the exact menu item names when possible. Include the price from the menu for each item. If a customer mentions variations or customizations, include them in the item name (e.g., "Corn on the Cob (with butter): $3.50" or "2x Corn on the Cob: $7.00"). For items with quantities, calculate the total price (e.g., "2x Corn on the Cob: $7.00" if the price is $3.50 each).';
+  }
+
   const systemPrompt = `You are an order detection system for a restaurant. Analyze the conversation and determine if the customer has placed an order.
 
-IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.
+IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
 
 If an order has been placed, extract:
 1. Customer name (if mentioned)
-2. All items ordered (be specific, include quantities and customizations)
+2. All items ordered (be specific, include quantities, prices, and customizations):
+   - Match items mentioned in the conversation to the menu items provided above
+   - Use exact menu item names when possible
+   - Include the price from the menu for each item in the format: "Item Name: $X.XX"
+   - For quantities, include quantity and calculate total price: "2x Item Name: $X.XX" (where $X.XX is the total for that quantity)
+   - Include customizations or modifications in the item name: "Item Name (customization): $X.XX"
+   - If an item is mentioned but not in the menu, still include it as mentioned (without price if unknown)
 3. Pickup time (if mentioned):
    - If relative time is mentioned (e.g., "in 1 hour", "30 minutes", "15 min", "half an hour"), convert it to absolute time based on current time (${currentTimeString})
    - If absolute time is mentioned (e.g., "3:30 PM", "5pm"), use it as-is
@@ -114,7 +181,7 @@ Return ONLY a valid JSON object with this exact structure:
   "orderMade": true/false,
   "orderDetails": {
     "customerName": "string or null",
-    "items": ["item 1", "item 2", ...],
+    "items": ["item 1: $X.XX", "item 2: $X.XX", ...],
     "pickupTime": "string in format 'HH:MM AM/PM' (e.g., '3:30 PM', '5:00 PM') or null",
     "notes": "string or null"
   }
@@ -153,12 +220,65 @@ If no order has been made, return: {"orderMade": false}`;
 }
 
 // Function to format order details into AI organized message format
-function formatOrderMessage(orderDetails: { customerName: string; items: string[]; pickupTime?: string; notes?: string }): string {
+function formatOrderMessage(orderDetails: { customerName: string; items: string[]; pickupTime?: string; notes?: string }, menuItems?: Array<{ name: string; price: string; category: string | null }>): string {
   let message = `Customer: ${orderDetails.customerName}\n`;
 
   // Add each item on its own line with spacing
+  // If items already have prices (from AI), use them as-is
+  // Otherwise, try to match with menu items and add prices
   orderDetails.items.forEach((item) => {
-    message += `\n${item}`;
+    // Check if item already has a price in the format "Item: $X.XX"
+    if (item.includes(':$') || item.includes(': $')) {
+      // Item already has price, use as-is
+      message += `\n${item}`;
+    } else if (menuItems && menuItems.length > 0) {
+      // Try to match item with menu items to add price
+      let matched = false;
+
+      // Look for quantity prefix (e.g., "2x ")
+      const quantityMatch = item.match(/^(\d+)x\s*(.+)$/i);
+      const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
+      const baseItemName = quantityMatch ? quantityMatch[2].trim() : item.trim();
+
+      // Try exact match first
+      for (const menuItem of menuItems) {
+        if (menuItem.name.toLowerCase() === baseItemName.toLowerCase()) {
+          const priceNum = parseFloat(menuItem.price.replace(/[^0-9.]/g, ''));
+          const totalPrice = (priceNum * quantity).toFixed(2);
+          const formattedItem = quantity > 1
+            ? `${quantity}x ${menuItem.name}: $${totalPrice}`
+            : `${menuItem.name}: ${menuItem.price}`;
+          message += `\n${formattedItem}`;
+          matched = true;
+          break;
+        }
+      }
+
+      // If no exact match, try partial match
+      if (!matched) {
+        for (const menuItem of menuItems) {
+          if (baseItemName.toLowerCase().includes(menuItem.name.toLowerCase()) ||
+            menuItem.name.toLowerCase().includes(baseItemName.toLowerCase())) {
+            const priceNum = parseFloat(menuItem.price.replace(/[^0-9.]/g, ''));
+            const totalPrice = (priceNum * quantity).toFixed(2);
+            const formattedItem = quantity > 1
+              ? `${quantity}x ${menuItem.name}: $${totalPrice}`
+              : `${menuItem.name}: ${menuItem.price}`;
+            message += `\n${formattedItem}`;
+            matched = true;
+            break;
+          }
+        }
+      }
+
+      // If still no match, use item as-is without price
+      if (!matched) {
+        message += `\n${item}`;
+      }
+    } else {
+      // No menu items available, use item as-is
+      message += `\n${item}`;
+    }
   });
 
   // Add notes as a separate line if they exist
@@ -228,11 +348,16 @@ async function checkForOrderDetection(
 
         console.log(`[Order Detection] Order ${orderId} has orderMade=${order.orderMade}, proceeding with analysis`);
 
+        // Get menu items with caching for context
+        const menuItems = await getMenuItemsWithCache(userId);
+        console.log(`[Order Detection] Retrieved ${menuItems.length} menu items for context`);
+
         // Analyze conversation for order
         console.log(`[Order Detection] Calling analyzeOrderFromConversation for order ${orderId}...`);
         const analysis = await analyzeOrderFromConversation(
           messages,
-          order.firstName || undefined
+          order.firstName || undefined,
+          menuItems
         );
 
         console.log(`[Order Detection] Analysis result for order ${orderId}:`, {
@@ -267,7 +392,7 @@ async function checkForOrderDetection(
               console.log(`[Order Detection] Pickup time changed from "${existingPickupTime}" to "${pickupTimeValue}", updating AI organized message...`);
 
               // Update the existing AI organized message with new pickup time
-              const updatedMessageText = formatOrderMessage(analysis.orderDetails);
+              const updatedMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
 
               // Update the message in the messages array
               const updatedMessages = messages.map(msg =>
@@ -334,7 +459,7 @@ async function checkForOrderDetection(
             }
 
             // Format and save AI organized message
-            const orderMessageText = formatOrderMessage(analysis.orderDetails);
+            const orderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
             console.log(`[Order Detection] Formatted order message for order ${orderId}:`, orderMessageText.substring(0, 100));
 
             const orderMessage: Message = {
@@ -900,6 +1025,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pickupTime: updatedPickupTime
       });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  // Send order to preparation (update status, create customer, stats, history)
+  app.post("/api/orders/:orderId/send-to-preparation", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+      const { orderDetails } = req.body;
+
+      // Get the order
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      // 1. Find or create customer
+      let customer = await storage.getCustomerByPhoneNumber(userId, order.number);
+
+      if (!customer) {
+        // Create new customer
+        const nameParts = (order.firstName && order.lastName)
+          ? { firstName: order.firstName, lastName: order.lastName }
+          : (order.firstName
+            ? { firstName: order.firstName, lastName: null }
+            : { firstName: null, lastName: null });
+
+        customer = await storage.createCustomer(userId, {
+          userId: userId,
+          phoneNumber: order.number,
+          firstName: nameParts.firstName || null,
+          lastName: nameParts.lastName || null,
+        });
+      }
+
+      // 2. Create or update customer stats
+      let customerStat = await storage.getCustomerStats(customer.id);
+      const totalSpent = parseFloat(orderDetails?.total || order.orderPrice || '0');
+
+      if (!customerStat) {
+        // Create new stats
+        await storage.createCustomerStats(customer.id, {
+          customerId: customer.id,
+          totalOrders: 1,
+          totalSpent: totalSpent.toString(),
+          lastOrderDate: new Date(),
+        });
+      } else {
+        // Update existing stats
+        const newTotalOrders = (customerStat.totalOrders || 0) + 1;
+        const newTotalSpent = parseFloat(customerStat.totalSpent || '0') + totalSpent;
+        await storage.updateCustomerStats(customer.id, {
+          totalOrders: newTotalOrders,
+          totalSpent: newTotalSpent.toFixed(2),
+          lastOrderDate: new Date(),
+        });
+      }
+
+      // 3. Create order history entry
+      await storage.createOrderHistory({
+        customerId: customer.id,
+        orderSummary: orderDetails || {
+          items: order.items || [],
+          total: order.orderPrice || '0',
+          pickupTime: order.pickupTime?.toISOString() || null,
+          notes: order.notes || null,
+        },
+        notes: orderDetails?.notes || order.notes || null,
+        status: 'Confirmed',
+      });
+
+      // 4. Update order status, price, pickup time, items, and notes
+      const updateData: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date } = {};
+
+      if (orderDetails?.total) {
+        updateData.orderPrice = orderDetails.total;
+      }
+
+      if (orderDetails?.items && orderDetails.items.length > 0) {
+        updateData.items = orderDetails.items;
+      }
+
+      if (orderDetails?.notes !== undefined) {
+        updateData.notes = orderDetails.notes || null;
+      }
+
+      if (orderDetails?.pickupTime) {
+        // Parse pickup time string to Date
+        // Handle formats like "3:30 PM" or ISO string
+        try {
+          let pickupTimeDate: Date;
+          if (orderDetails.pickupTime.match(/\d{1,2}:\d{2}\s*(AM|PM)/i)) {
+            // Format: "3:30 PM" - need to convert to Date
+            const timeMatch = orderDetails.pickupTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+            if (timeMatch) {
+              let hours = parseInt(timeMatch[1]);
+              const minutes = parseInt(timeMatch[2]);
+              const period = timeMatch[3].toUpperCase();
+
+              if (period === 'PM' && hours !== 12) hours += 12;
+              if (period === 'AM' && hours === 12) hours = 0;
+
+              const now = new Date();
+              pickupTimeDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
+            } else {
+              pickupTimeDate = new Date(orderDetails.pickupTime);
+            }
+          } else {
+            pickupTimeDate = new Date(orderDetails.pickupTime);
+          }
+          updateData.pickupTime = pickupTimeDate;
+        } catch (error) {
+          console.error('Error parsing pickup time:', error);
+        }
+      }
+
+      // Update order details (price, items, notes, pickup time)
+      if (Object.keys(updateData).length > 0) {
+        await storage.updateOrderDetails(orderId, updateData);
+      }
+
+      // Update order status to Confirmed
+      await storage.updateOrderStatus(orderId, 'Confirmed');
+
+      res.json({
+        success: true,
+        message: 'Order sent to preparation successfully',
+        customerId: customer.id
+      });
+    } catch (error) {
+      console.error('Error sending order to preparation:', error);
       next(error);
     }
   });
