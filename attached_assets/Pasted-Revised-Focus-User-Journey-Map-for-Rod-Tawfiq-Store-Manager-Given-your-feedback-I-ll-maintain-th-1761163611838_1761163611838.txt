@@ -1,0 +1,190 @@
+Revised Focus: User Journey Map for Rod Tawfiq (Store Manager)
+Given your feedback, I’ll maintain the current and future journey maps for Rod, emphasizing his role in handling customer orders via the existing Google Maps call-to-iMessage process and proposing enhancements through a text-to-order app. This will address his pain points (e.g., manual entry, call interruptions) and support his goals (e.g., efficiency, customer satisfaction). I’ll exclude Abdullah’s journey map moving forward unless you indicate otherwise.
+Current Journey Map: Rod Tawfiq
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+PhaseActionsGoals & ExperiencesFeelings & ThoughtsPain PointsOpportunitiesInquiry- Customer finds store on Google Maps, presses call.
+- Rod declines call, sends custom iMessage: "Hey, we're at the corner gas station lot in Dearborn Heights. Text your name, order, and pickup time."- Guide customer to text-based ordering.
+- Ensure quick transition.- Initial excitement ("New order!").
+- Slight annoyance if calls persist.- Calls disrupt workflow.
+- Some customers confused by text shift.- Auto-reply system to skip calls.Confirmation- Customer texts back (e.g., "John, Crispy Cancun, 15 min").
+- Rod confirms details via iMessage ("Mild or spicy? Total is $X—cool?").
+- Handles changes or upsells (e.g., Power Hour deal).- Verify order accuracy.
+- Build customer trust.- Engaged ("Love the interaction").
+- Frustration if back-and-forth drags (e.g., 10+ mins).- Manual typing risks errors.
+- Multitasking with multiple threads.- Pre-set confirmation templates.
+- AI to parse texts.Queueing- Rod walks to POS tablet (10 ft), manually enters order.
+- Checks inventory if needed, queues for kitchen.- Seamless handoff to kitchen.
+- Avoid stockouts.- Focused ("Getting it done").
+- Anxious if queue backs up.- Retyping errors (e.g., added fries by mistake).
+- No real-time inventory alerts.- Auto-queue to POS.
+- Inventory sync.Completion- Rod coordinates with kitchen team.
+- Notifies customer via iMessage ("Ready in 5 min").
+- Customer picks up, pays at POS.- Deliver fresh, accurate orders.
+- Ensure timely pickup.- Relief when smooth.
+- Stressed during rush hours.- Manual status updates.
+- Payment hiccups at POS.- Automated status updates.
+- Integrated payment option.Feedback- Rod reviews past orders manually (POS export).
+- Notes trends (e.g., late-night Cancun spikes).- Improve prep and stock.
+- Maintain quality.- Satisfied with insights.
+- Overwhelmed by manual process.- Time-consuming analysis.
+- No automated reporting.- Automated analytics dashboards.
+- Trend alerts.
+Future Journey Map: Rod Tawfiq (with Text-to-Order App)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+PhaseActionsGoals & ExperiencesFeelings & ThoughtsPain Points (Mitigated)Opportunities RealizedInquiry- Customer texts store directly.
+- App sends auto-reply: "Welcome to Corn on the Corner! Reply with your order (link: cornonthecorner.com/menu), name, and time. We'll confirm ASAP."- Immediate customer engagement.
+- Reduce call interruptions.- Excited ("Hands-free start!").
+- Confident in process.- No more call declines.
+- Clearer instructions reduce confusion.- Scalable text intake.
+- 24/7 availability.Confirmation- App parses text, auto-checks inventory.
+- Rod gets push notification, one-tap confirms or adjusts (e.g., suggests alternative if low stock).
+- Customer gets confirmation text.- Accurate order capture.
+- Efficient verification.- Relieved ("No typing errors").
+- Positive ("Quick and smart").- Minimized manual entry.
+- Inventory alerts prevent stock issues.- AI-driven order parsing.
+- Real-time inventory integration.Queueing- Order auto-queues to POS and kitchen display.
+- Rod monitors via app, sorts by time/type, color-codes urgency.- Streamlined kitchen workflow.
+- Better order visibility.- In control ("Team’s on it").
+- Calm during peaks.- No retyping or manual checks.
+- Reduced queue bottlenecks.- POS and kitchen sync.
+- Priority sorting.Completion- App tracks status (Prepping → Done).
+- Auto-texts customer ("Ready in 5 min").
+- Rod handles pickup, optional app payment.- Timely delivery.
+- Enhanced customer experience.- Proud ("Smooth operation").
+- Relaxed during rush.- No manual updates.
+- Fewer payment delays.- Automated notifications.
+- Payment integration.Feedback- App generates automated reports (e.g., Cancun late-night spikes).
+- Rod reviews trends, adjusts prep/stock.- Data-driven improvements.
+- Proactive planning.- Empowered ("Data at my fingertips").
+- Optimistic for growth.- No manual exports.
+- Faster insights.- Actionable analytics.
+- Predictive restocking.
+Key Insights for Rod’s Journey
+
+Current Pain Points: The manual process of declining calls, typing iMessages, and re-entering orders into the POS creates inefficiencies and errors, especially during peak times (noon-2 PM, post-midnight). Call interruptions add to the disruption.
+Future Opportunities: An app that automates call-to-text transitions, parses orders, integrates with POS, and provides real-time inventory checks can save Rod hours weekly, aligning with his vision of consistent quality and potential franchising.
+Emotional Arc: Moves from frustration (manual tasks, call handling) to confidence and pride (automated, efficient workflow).
+Product Design Priorities: Focus on:
+
+Automated Inquiry: Replace call declines with an immediate text response system.
+Smart Confirmation: AI to interpret texts and inventory checks to reduce errors.
+Seamless Queueing: Direct POS integration and kitchen display sync.
+Efficient Completion: Status tracking and payment options.
+Insightful Feedback: Automated reporting for trend-based decisions.
+
+
+
+
+Next Steps
+Since the focus is now on Rod, here’s how we can proceed:
+
+Prototype Features: Develop a basic app mockup with auto-reply, order parsing, and POS integration based on the future journey map.
+Validation: Run a quick follow-up with Rod (e.g., 5-10 questions) to test these features’ feasibility, like “How would an auto-reply with a menu link feel?” or “Would one-tap confirmation work for you?”
+Iteration: Adjust the journey map or add phases (e.g., “Training” for app adoption) based on feedback.
+Visualization: I can help create a sticky-note-style visual or chart (if you request one) to present to your client.
+
+Let me know if you’d like to dive into prototyping, refine the map further, or explore additional aspects of Rod’s experience!
