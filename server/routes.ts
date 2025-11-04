@@ -308,6 +308,28 @@ async function generateAISuggestedResponse(
   ws?: WebSocket
 ): Promise<void> {
   try {
+    // Only generate suggestions when the last message is from the customer (not the owner)
+    // isOutgoing: true = Customer messages, isOutgoing: false = Restaurant/Owner messages
+    if (messages.length === 0) {
+      return; // No messages, nothing to suggest
+    }
+
+    // Get the last message (most recent)
+    const lastMessage = messages[messages.length - 1];
+
+    // Skip if last message is from restaurant/owner (isOutgoing: false)
+    // Only generate suggestions for customer messages (isOutgoing: true)
+    if (!lastMessage.isOutgoing) {
+      console.log(`[AI Suggested Response] Skipping - last message is from restaurant/owner, not generating suggestion`);
+      return;
+    }
+
+    // Also skip AI organized messages (they're system messages, not customer messages)
+    if ((lastMessage as any).isAIOrganized) {
+      console.log(`[AI Suggested Response] Skipping - last message is AI organized message, not generating suggestion`);
+      return;
+    }
+
     // Format conversation for AI analysis
     const conversationText = messages.map(msg => {
       const sender = msg.isOutgoing ? 'Customer' : 'Restaurant';
@@ -442,15 +464,38 @@ async function checkForOrderDetection(
           return;
         }
 
-        // Always analyze - customer could change their mind, so AI should always listen
-        const existingAIOrganizedMessage = messages.find(msg => msg.isAIOrganized === true);
-        console.log(`[Order Detection] Order ${orderId}, proceeding with analysis (always listening)`);
+        // Check if there's an existing AI organized message
+        // If it exists, check if there are new messages after it
+        const allAIOrganizedMessages = messages.filter(msg => msg.isAIOrganized === true);
+        const latestAIOrganizedMessage = allAIOrganizedMessages.length > 0
+          ? allAIOrganizedMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+          : null;
+
+        let hasNewMessages = false;
+
+        if (latestAIOrganizedMessage) {
+          // Find messages after the latest AI organized message
+          const lastAITimestamp = new Date(latestAIOrganizedMessage.timestamp).getTime();
+          const newMessages = messages.filter(msg =>
+            new Date(msg.timestamp).getTime() > lastAITimestamp && !msg.isAIOrganized
+          );
+
+          if (newMessages.length === 0) {
+            // No new messages after last AI organized message, skip analysis
+            console.log(`[Order Detection] No new messages after last AI organized message, skipping analysis`);
+            resolve();
+            return;
+          }
+
+          hasNewMessages = true;
+          console.log(`[Order Detection] Found ${newMessages.length} new messages after last AI organized message, will analyze full conversation and compare`);
+        }
 
         // Get menu items with caching for context
         const menuItems = await getMenuItemsWithCache(userId);
         console.log(`[Order Detection] Retrieved ${menuItems.length} menu items for context`);
 
-        // Analyze conversation for order
+        // Analyze FULL conversation for order (need full context for AI to understand the order)
         console.log(`[Order Detection] Calling analyzeOrderFromConversation for order ${orderId}...`);
         const analysis = await analyzeOrderFromConversation(
           messages,
@@ -466,6 +511,125 @@ async function checkForOrderDetection(
         });
 
         if (analysis.orderMade && analysis.orderDetails) {
+          // If there's a previous AI organized message, compare the new analysis with it
+          // Only create a new message if the order has actually changed
+          if (latestAIOrganizedMessage && hasNewMessages) {
+            // Parse the previous AI organized message to extract order details
+            const previousText = latestAIOrganizedMessage.text;
+            const newOrderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
+
+            // Compare the formatted messages - if they're the same, order hasn't changed
+            if (previousText === newOrderMessageText) {
+              console.log(`[Order Detection] Order has not changed (exact match), skipping new AI organized message`);
+              resolve();
+              return;
+            }
+
+            // Do a more detailed comparison of order details
+            // Extract items from previous message by parsing the formatted text
+            // Items appear after "Customer:" line and before notes/pickup time
+            const previousLines = previousText.split('\n').filter(line => line.trim());
+            const previousItems: string[] = [];
+            let foundCustomer = false;
+            let inItemsSection = false;
+
+            for (const line of previousLines) {
+              const trimmed = line.trim();
+
+              if (trimmed.toLowerCase().startsWith('customer:')) {
+                foundCustomer = true;
+                inItemsSection = true;
+                continue;
+              }
+
+              if (foundCustomer && inItemsSection) {
+                // Check if we've reached notes or pickup time section
+                if (trimmed.toLowerCase().includes('pickup time:')) {
+                  inItemsSection = false;
+                  break;
+                }
+
+                // Items contain $ (price) or start with quantity (e.g., "2x ")
+                // Skip empty lines and notes (notes don't have $ and don't start with quantity)
+                if (trimmed && (trimmed.includes('$') || trimmed.match(/^\d+x\s+/i))) {
+                  previousItems.push(trimmed);
+                } else if (trimmed.length > 50 || (previousItems.length > 0 && !trimmed.includes('$') && !trimmed.match(/^\d+x\s+/i))) {
+                  // Likely notes section, stop collecting items
+                  inItemsSection = false;
+                  break;
+                }
+              }
+            }
+
+            // Extract items from new analysis (these are the raw items from AI)
+            const newItems = analysis.orderDetails.items || [];
+
+            // Normalize items for comparison - extract just item name and quantity, ignore prices
+            const normalizeItem = (item: string) => {
+              // Remove price information (everything after : $ or :$)
+              let normalized = item.trim()
+                .replace(/:\s*\$[0-9.]+.*$/i, '') // Remove price and everything after
+                .replace(/\s+/g, ' ') // Normalize whitespace
+                .toLowerCase();
+
+              // Extract quantity and item name (e.g., "2x burger" or "burger")
+              const quantityMatch = normalized.match(/^(\d+)x\s*(.+)$/);
+              if (quantityMatch) {
+                const quantity = parseInt(quantityMatch[1]);
+                const itemName = quantityMatch[2].trim();
+                return `${quantity}x ${itemName}`;
+              }
+
+              return normalized.trim();
+            };
+
+            const previousItemsNormalized = previousItems.map(normalizeItem).sort();
+            const newItemsNormalized = newItems.map(normalizeItem).sort();
+
+            // Compare items
+            const itemsChanged = JSON.stringify(previousItemsNormalized) !== JSON.stringify(newItemsNormalized);
+
+            // Compare pickup time (normalize both to handle format variations)
+            const previousPickupTimeMatch = previousText.match(/Pickup Time:\s*(.+?)(?:\n|$)/i);
+            const previousPickupTime = previousPickupTimeMatch?.[1]?.trim() || null;
+            const newPickupTime = analysis.orderDetails.pickupTime || null;
+            const pickupTimeChanged = previousPickupTime !== newPickupTime;
+
+            // Compare notes (if present)
+            // Notes appear after items, before pickup time
+            const notesMatch = previousText.match(/Customer:[\s\S]*?\n\n([\s\S]*?)(?:\n\nPickup Time:|$)/i);
+            const previousNotes = notesMatch?.[1]?.trim() || null;
+            // Clean up notes - remove any items that might have been captured
+            const cleanedPreviousNotes = previousNotes && !previousNotes.includes('$') && !previousNotes.match(/^\d+x\s+/i)
+              ? previousNotes
+              : null;
+            const newNotes = analysis.orderDetails.notes?.trim() || null;
+            const notesChanged = cleanedPreviousNotes !== newNotes;
+
+            console.log(`[Order Detection] Comparison results:`, {
+              itemsChanged,
+              pickupTimeChanged,
+              notesChanged,
+              previousItems: previousItemsNormalized,
+              newItems: newItemsNormalized,
+              previousItemsCount: previousItemsNormalized.length,
+              newItemsCount: newItemsNormalized.length,
+              previousPickupTime,
+              newPickupTime,
+              previousNotes: cleanedPreviousNotes,
+              newNotes
+            });
+
+            // Only skip if nothing changed
+            if (!itemsChanged && !pickupTimeChanged && !notesChanged) {
+              console.log(`[Order Detection] Order details unchanged, skipping new AI organized message`);
+              resolve();
+              return;
+            }
+
+            console.log(`[Order Detection] Order has changed - items: ${itemsChanged}, pickup time: ${pickupTimeChanged}, notes: ${notesChanged}`);
+          }
+
           // Check if pickup time is included in order details (handle various formats: string, null, undefined, "null" string)
           const pickupTimeValue = analysis.orderDetails.pickupTime;
           const hasPickupTime = pickupTimeValue &&
@@ -479,16 +643,12 @@ async function checkForOrderDetection(
             hasPickupTime: hasPickupTime
           });
 
-          // Always create a NEW AI organized message bubble (don't update existing ones)
-          // This allows users to see the order history as it changes
+          // Create a NEW AI organized message bubble only if order changed
           {
 
-            // Format and create NEW AI organized message (always create new, never update existing)
+            // Format and create NEW AI organized message
             const orderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
             console.log(`[Order Detection] Creating NEW AI organized message for order ${orderId}:`, orderMessageText.substring(0, 100));
-            if (existingAIOrganizedMessage) {
-              console.log(`[Order Detection] Previous AI organized message exists, creating new one instead of updating`);
-            }
 
             const orderMessage: Message = {
               id: randomUUID(), // Always generate new ID for new message bubble

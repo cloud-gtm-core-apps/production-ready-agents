@@ -35,6 +35,7 @@ export default function ConversationView({
 }: ConversationViewProps) {
   const [messageInput, setMessageInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [autoStartEditing, setAutoStartEditing] = useState(false);
   const [aiItems, setAiItems] = useState<string[] | undefined>(undefined);
   const [aiNotes, setAiNotes] = useState<string | undefined>(undefined);
@@ -63,16 +64,19 @@ export default function ConversationView({
     return () => clearTimeout(timer);
   }, [conversation.id, conversation.messages.length, optimisticMessages.length, Object.keys(streamingMessages).length, isTyping]);
 
-  // Auto-scroll when AI suggested response appears to prevent blocking latest messages
+  // Auto-scroll up slightly when AI suggested response appears to prevent blocking latest messages
   useEffect(() => {
-    if (aiSuggestedResponse && messagesEndRef.current) {
+    if (aiSuggestedResponse && messagesContainerRef.current) {
       // Small delay to let the AI suggested response render first
       const timer = setTimeout(() => {
-        if (messagesEndRef.current) {
-          // Scroll to show the latest messages above the AI suggested response
-          messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        if (messagesContainerRef.current) {
+          // Scroll the messages container up by a small amount (about 80px for the AI suggested response)
+          messagesContainerRef.current.scrollBy({ 
+            top: 80, 
+            behavior: 'smooth' 
+          });
         }
-      }, 100);
+      }, 150);
       return () => clearTimeout(timer);
     }
   }, [aiSuggestedResponse]);
@@ -92,18 +96,31 @@ export default function ConversationView({
   useEffect(() => {
     if (Object.keys(streamingMessages).length === 0) return;
     
-    // Check if any streaming message text matches a real message
-    // Only remove if the text matches exactly to prevent flickering
-    const realMessageTexts = new Set(conversation.messages.map(m => m.text.trim()));
+    // Create normalized text sets for comparison
+    const realMessageTexts = new Set<string>();
+    const realMessageTextsNormalized = new Set<string>();
+    conversation.messages.forEach(m => {
+      const trimmed = m.text.trim();
+      realMessageTexts.add(trimmed);
+      realMessageTextsNormalized.add(trimmed.toLowerCase());
+    });
+    
     setStreamingMessages(prev => {
       const updated = { ...prev };
       let hasChanges = false;
       
       Object.keys(updated).forEach(messageId => {
-        const streamingText = updated[messageId].text.trim();
-        // Only remove if we have a matching message AND the streaming message is visible
-        // This ensures smooth transition - the DB message replaces the streaming one seamlessly
-        if (updated[messageId].isVisible && streamingText && realMessageTexts.has(streamingText)) {
+        const streamingMsg = updated[messageId];
+        const streamingText = streamingMsg.text.trim();
+        const streamingTextNormalized = streamingText.toLowerCase();
+        
+        // Remove if:
+        // 1. Streaming is complete (isVisible) AND we have a matching real message (exact or normalized match)
+        // 2. OR if the text matches even if not visible yet (to prevent duplicates from refetch)
+        if (streamingText && (
+          realMessageTexts.has(streamingText) || 
+          realMessageTextsNormalized.has(streamingTextNormalized)
+        )) {
           delete updated[messageId];
           hasChanges = true;
         }
@@ -111,7 +128,7 @@ export default function ConversationView({
       
       return hasChanges ? updated : prev;
     });
-  }, [conversation.messages]);
+  }, [conversation.messages, streamingMessages]);
   
   // Listen to WebSocket events for streaming messages and sent messages
   useEffect(() => {
@@ -172,6 +189,21 @@ export default function ConversationView({
             const existing = prev[data.messageId];
             if (!existing) return prev;
             
+            // Check if this message already exists in conversation.messages
+            // If it does, don't add it to streaming messages to avoid duplicates
+            const messageText = existing.text.trim();
+            const alreadyExists = conversation.messages.some(m => {
+              const realText = m.text.trim();
+              return realText === messageText || realText.toLowerCase() === messageText.toLowerCase();
+            });
+            
+            if (alreadyExists) {
+              // Message already in DB, remove from streaming
+              const updated = { ...prev };
+              delete updated[data.messageId];
+              return updated;
+            }
+            
             return {
               ...prev,
               [data.messageId]: {
@@ -181,13 +213,17 @@ export default function ConversationView({
             };
           });
           
-          // Don't remove immediately - let the useEffect handle removal when it appears in conversation.messages
-          // This prevents the flash/disappear bug
+          // The useEffect above will remove the streaming message when it appears in conversation.messages
           // The debounced order detection will trigger on the server and send AI organized message if needed
         } else if (data.type === 'message_received' && data.isAIOrganized) {
           // AI organized message received - trigger refetch to show it
           // This handles both new and updated AI organized messages
           console.log(`[ConversationView] AI organized message received for order ${data.orderId}, refetching...`);
+          
+          // Clear all streaming messages before refetch to prevent duplicates
+          // The refetch will bring in all messages from DB including previously streamed ones
+          setStreamingMessages({});
+          
           setTimeout(async () => {
             // Refetch all order-related queries (matching query keys that start with '/api/orders')
             await queryClient.refetchQueries({ 
@@ -430,56 +466,111 @@ export default function ConversationView({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {conversation.messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            text={message.text}
-            isOutgoing={message.isOutgoing}
-            timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-            })}
-            isAIOrganized={message.isAIOrganized}
-          />
-        ))}
-        {/* Show optimistic messages (sent but not yet confirmed) */}
-        {optimisticMessages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            text={message.text}
-            isOutgoing={message.isOutgoing}
-            timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-            })}
-            isAIOrganized={false}
-          />
-        ))}
-        {/* Show streaming messages (invisible blocks that become visible as text arrives) */}
-        {Object.entries(streamingMessages).map(([messageId, message]) => (
-          <div
-            key={messageId}
-            className={`transition-opacity duration-300 ${
-              message.isVisible 
-                ? 'opacity-100' 
-                : 'opacity-0'
-            }`}
-          >
-            <MessageBubble
-              text={message.text || ' '}
-              isOutgoing={true}
-              timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
-                hour: 'numeric',
-                minute: '2-digit',
-                hour12: true
-              })}
-              isAIOrganized={false}
-            />
-          </div>
-        ))}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3" ref={messagesContainerRef}>
+        {(() => {
+          // Create a set of existing message texts and IDs from conversation for duplicate detection
+          const existingMessageTexts = new Set<string>();
+          const existingMessageIds = new Set<string>();
+          conversation.messages.forEach(m => {
+            existingMessageIds.add(m.id);
+            existingMessageTexts.add(m.text.trim().toLowerCase());
+          });
+          
+          // Filter out streaming messages that already exist in conversation.messages
+          const filteredStreamingMessages = Object.entries(streamingMessages).filter(([id, m]) => {
+            const text = m.text.trim();
+            // Don't include if:
+            // 1. Message ID already exists in conversation
+            // 2. Message text already exists in conversation (normalized)
+            return !existingMessageIds.has(id) && 
+                   !existingMessageTexts.has(text.toLowerCase()) &&
+                   text.length > 0; // Only include non-empty messages
+          });
+          
+          // Merge all messages (conversation, optimistic, streaming) and sort by timestamp
+          const allMessages: Array<{
+            id: string;
+            text: string;
+            isOutgoing: boolean;
+            timestamp: string;
+            isAIOrganized?: boolean;
+            isOptimistic?: boolean;
+            isStreaming?: boolean;
+            isVisible?: boolean;
+          }> = [
+            ...conversation.messages.map(m => ({
+              id: m.id,
+              text: m.text,
+              isOutgoing: m.isOutgoing,
+              timestamp: m.timestamp,
+              isAIOrganized: m.isAIOrganized,
+            })),
+            ...optimisticMessages.filter(m => {
+              // Filter out optimistic messages that already exist in conversation
+              const text = m.text.trim().toLowerCase();
+              return !existingMessageIds.has(m.id) && !existingMessageTexts.has(text);
+            }).map(m => ({
+              id: m.id,
+              text: m.text,
+              isOutgoing: m.isOutgoing,
+              timestamp: m.timestamp,
+              isOptimistic: true,
+            })),
+            ...filteredStreamingMessages.map(([id, m]) => ({
+              id,
+              text: m.text || ' ',
+              isOutgoing: true,
+              timestamp: m.timestamp,
+              isStreaming: true,
+              isVisible: m.isVisible,
+            })),
+          ];
+
+          // Sort by timestamp to ensure chronological order
+          allMessages.sort((a, b) => 
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+
+          return allMessages.map((message) => {
+            if (message.isStreaming) {
+              return (
+                <div
+                  key={message.id}
+                  className={`transition-opacity duration-300 ${
+                    message.isVisible 
+                      ? 'opacity-100' 
+                      : 'opacity-0'
+                  }`}
+                >
+                  <MessageBubble
+                    text={message.text}
+                    isOutgoing={message.isOutgoing}
+                    timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                      hour12: true
+                    })}
+                    isAIOrganized={false}
+                  />
+                </div>
+              );
+            }
+
+            return (
+              <MessageBubble
+                key={message.id}
+                text={message.text}
+                isOutgoing={message.isOutgoing}
+                timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true
+                })}
+                isAIOrganized={message.isAIOrganized}
+              />
+            );
+          });
+        })()}
         {/* Show typing indicator when AI is responding */}
         {isTyping && (
           <div className="flex items-start gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300 -mt-3">
