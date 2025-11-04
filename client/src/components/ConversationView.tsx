@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Phone, Info, Trash2, Sparkles } from 'lucide-react';
+import { queryClient } from '@/lib/queryClient';
+import { ArrowLeft, Phone, Info, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import MessageBubble from './MessageBubble';
@@ -12,25 +13,25 @@ import type { Conversation, OrderDetails } from '@shared/schema';
 interface ConversationViewProps {
   conversation: Conversation;
   detectedPickupTime?: string;
+  ws?: WebSocket | null;
   onBack?: () => void;
   onConfirmOrder?: (conversationId: string) => void;
   onMarkReady?: (conversationId: string) => void;
   onUpdateOrder?: (conversationId: string, orderDetails: OrderDetails) => void;
   onSendMessage?: (conversationId: string, messageText: string) => void;
   onDeleteOrder?: (conversationId: string) => void;
-  onSummarizeOrder?: (conversationId: string) => void;
 }
 
 export default function ConversationView({ 
   conversation, 
   detectedPickupTime,
+  ws,
   onBack,
   onConfirmOrder,
   onMarkReady,
   onUpdateOrder,
   onSendMessage,
-  onDeleteOrder,
-  onSummarizeOrder
+  onDeleteOrder
 }: ConversationViewProps) {
   const [messageInput, setMessageInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -38,12 +39,180 @@ export default function ConversationView({
   const [aiItems, setAiItems] = useState<string[] | undefined>(undefined);
   const [aiNotes, setAiNotes] = useState<string | undefined>(undefined);
   const [aiPickupTime, setAiPickupTime] = useState<string | undefined>(undefined);
+  const [optimisticMessages, setOptimisticMessages] = useState<Array<{ id: string; text: string; isOutgoing: boolean; timestamp: string }>>([]);
+  const [streamingMessages, setStreamingMessages] = useState<Record<string, { text: string; timestamp: string; isVisible: boolean }>>({});
+  const [isTyping, setIsTyping] = useState(false);
+  const [aiSuggestedResponse, setAiSuggestedResponse] = useState<string | undefined>(conversation.aiSuggestedResponse);
   const displayName = conversation.customerName || conversation.phoneNumber;
+  
+  // Update aiSuggestedResponse when conversation prop changes
+  useEffect(() => {
+    if (conversation.aiSuggestedResponse) {
+      setAiSuggestedResponse(conversation.aiSuggestedResponse);
+    }
+  }, [conversation.aiSuggestedResponse]);
   
   // Scroll to bottom when conversation opens or messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation.id, conversation.messages.length]);
+    // Small delay to ensure DOM is updated before scrolling for smoother animation
+    const timer = setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [conversation.id, conversation.messages.length, optimisticMessages.length, Object.keys(streamingMessages).length, isTyping]);
+
+  // Auto-scroll when AI suggested response appears to prevent blocking latest messages
+  useEffect(() => {
+    if (aiSuggestedResponse && messagesEndRef.current) {
+      // Small delay to let the AI suggested response render first
+      const timer = setTimeout(() => {
+        if (messagesEndRef.current) {
+          // Scroll to show the latest messages above the AI suggested response
+          messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [aiSuggestedResponse]);
+  
+  // Remove optimistic messages when they appear in the real conversation
+  useEffect(() => {
+    if (optimisticMessages.length === 0) return;
+    
+    // Check if any optimistic message text matches a real message
+    const realMessageTexts = new Set(conversation.messages.map(m => m.text.trim()));
+    setOptimisticMessages(prev => 
+      prev.filter(msg => !realMessageTexts.has(msg.text.trim()))
+    );
+  }, [conversation.messages, optimisticMessages.length]);
+  
+  // Remove streaming messages when they appear in the real conversation
+  useEffect(() => {
+    if (Object.keys(streamingMessages).length === 0) return;
+    
+    // Check if any streaming message text matches a real message
+    // Only remove if the text matches exactly to prevent flickering
+    const realMessageTexts = new Set(conversation.messages.map(m => m.text.trim()));
+    setStreamingMessages(prev => {
+      const updated = { ...prev };
+      let hasChanges = false;
+      
+      Object.keys(updated).forEach(messageId => {
+        const streamingText = updated[messageId].text.trim();
+        // Only remove if we have a matching message AND the streaming message is visible
+        // This ensures smooth transition - the DB message replaces the streaming one seamlessly
+        if (updated[messageId].isVisible && streamingText && realMessageTexts.has(streamingText)) {
+          delete updated[messageId];
+          hasChanges = true;
+        }
+      });
+      
+      return hasChanges ? updated : prev;
+    });
+  }, [conversation.messages]);
+  
+  // Listen to WebSocket events for streaming messages and sent messages
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        // Only handle messages for this conversation
+        if (data.orderId !== conversation.id) return;
+
+        if (data.type === 'message_sent') {
+          // Rod's message was sent and confirmed - it will appear in refetch
+          // The useEffect above will remove it from optimistic when it appears in conversation.messages
+        } else if (data.type === 'message_stream_start') {
+          // Start typing animation
+          setIsTyping(true);
+          // Create invisible placeholder block to collect chunks
+          setStreamingMessages(prev => ({
+            ...prev,
+            [data.messageId]: {
+              text: '',
+              timestamp: data.timestamp || new Date().toISOString(),
+              isVisible: false,
+            },
+          }));
+        } else if (data.type === 'message_stream_chunk') {
+          // Collect chunks but don't show them yet - wait for complete
+          setStreamingMessages(prev => {
+            const existing = prev[data.messageId];
+            if (!existing) {
+              // If message doesn't exist yet, create it
+              setIsTyping(true);
+              return {
+                ...prev,
+                [data.messageId]: {
+                  text: data.text,
+                  timestamp: new Date().toISOString(),
+                  isVisible: false,
+                },
+              };
+            }
+            
+            return {
+              ...prev,
+              [data.messageId]: {
+                ...existing,
+                text: existing.text + data.text,
+                isVisible: false, // Keep invisible until streaming completes
+              },
+            };
+          });
+        } else if (data.type === 'message_stream_complete') {
+          // Stop typing animation and show the complete message
+          setIsTyping(false);
+          setStreamingMessages(prev => {
+            const existing = prev[data.messageId];
+            if (!existing) return prev;
+            
+            return {
+              ...prev,
+              [data.messageId]: {
+                ...existing,
+                isVisible: true, // Now make it visible with complete text
+              },
+            };
+          });
+          
+          // Don't remove immediately - let the useEffect handle removal when it appears in conversation.messages
+          // This prevents the flash/disappear bug
+          // The debounced order detection will trigger on the server and send AI organized message if needed
+        } else if (data.type === 'message_received' && data.isAIOrganized) {
+          // AI organized message received - trigger refetch to show it
+          // This handles both new and updated AI organized messages
+          console.log(`[ConversationView] AI organized message received for order ${data.orderId}, refetching...`);
+          setTimeout(async () => {
+            // Refetch all order-related queries (matching query keys that start with '/api/orders')
+            await queryClient.refetchQueries({ 
+              queryKey: ['/api/orders'],
+              exact: false 
+            });
+            console.log(`[ConversationView] Refetched conversations after AI organized message`);
+          }, 300); // Slightly longer delay to ensure DB is updated
+        } else if (data.type === 'ai_suggested_response') {
+          // AI suggested response received - update local state
+          console.log(`[ConversationView] AI suggested response received for order ${data.orderId}: ${data.suggestion}`);
+          if (data.orderId === conversation.id) {
+            setAiSuggestedResponse(data.suggestion);
+          }
+        }
+      } catch (error) {
+        // Not a JSON message, ignore
+      }
+    };
+
+    ws.addEventListener('message', handleMessage);
+    return () => {
+      ws.removeEventListener('message', handleMessage);
+    };
+  }, [ws, conversation.id]);
   
   const isUrgent = () => {
     if (conversation.orderStatus === 'new') return false;
@@ -81,8 +250,22 @@ export default function ConversationView({
 
   const handleSendMessage = () => {
     if (messageInput.trim() && onSendMessage) {
-      onSendMessage(conversation.id, messageInput.trim());
+      const messageText = messageInput.trim();
+      const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Add message to optimistic state immediately for instant display
+      setOptimisticMessages(prev => [...prev, {
+        id: tempMessageId,
+        text: messageText,
+        isOutgoing: false, // Rod's messages are outgoing from restaurant perspective
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      // Clear input
       setMessageInput('');
+      
+      // Send via WebSocket
+      onSendMessage(conversation.id, messageText);
     }
   };
 
@@ -158,12 +341,20 @@ export default function ConversationView({
   };
 
   const handleConfirmOrder = () => {
-    // Find AI organized message
-    const aiMessage = conversation.messages.find(msg => msg.isAIOrganized === true);
+    // Find the LATEST AI organized message (most recent timestamp)
+    // Since we now create new messages instead of updating, we need the most recent one
+    const aiMessages = conversation.messages.filter(msg => msg.isAIOrganized === true);
     
-    if (aiMessage) {
-      // Parse AI message to extract items, notes, and pickup time
-      const parsed = parseAIMessage(aiMessage.text);
+    if (aiMessages.length > 0) {
+      // Sort by timestamp descending to get the latest one
+      const latestAIMessage = aiMessages.sort((a, b) => {
+        const timeA = new Date(a.timestamp).getTime();
+        const timeB = new Date(b.timestamp).getTime();
+        return timeB - timeA; // Descending order (newest first)
+      })[0];
+      
+      // Parse the latest AI message to extract items, notes, and pickup time
+      const parsed = parseAIMessage(latestAIMessage.text);
       setAiItems(parsed.items.length > 0 ? parsed.items : undefined);
       setAiNotes(parsed.notes || undefined);
       setAiPickupTime(parsed.pickupTime || undefined);
@@ -253,12 +444,60 @@ export default function ConversationView({
             isAIOrganized={message.isAIOrganized}
           />
         ))}
+        {/* Show optimistic messages (sent but not yet confirmed) */}
+        {optimisticMessages.map((message) => (
+          <MessageBubble
+            key={message.id}
+            text={message.text}
+            isOutgoing={message.isOutgoing}
+            timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            })}
+            isAIOrganized={false}
+          />
+        ))}
+        {/* Show streaming messages (invisible blocks that become visible as text arrives) */}
+        {Object.entries(streamingMessages).map(([messageId, message]) => (
+          <div
+            key={messageId}
+            className={`transition-opacity duration-300 ${
+              message.isVisible 
+                ? 'opacity-100' 
+                : 'opacity-0'
+            }`}
+          >
+            <MessageBubble
+              text={message.text || ' '}
+              isOutgoing={true}
+              timestamp={new Date(message.timestamp).toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              })}
+              isAIOrganized={false}
+            />
+          </div>
+        ))}
+        {/* Show typing indicator when AI is responding */}
+        {isTyping && (
+          <div className="flex items-start gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300 -mt-3">
+            <div className="max-w-[75%] px-4 py-2 rounded-2xl bg-muted text-foreground rounded-bl-md">
+              <div className="flex gap-1">
+                <div className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                <div className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                <div className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+              </div>
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.aiSuggestedResponse && (
+      {aiSuggestedResponse && (
         <AISuggestedResponse
-          suggestion={conversation.aiSuggestedResponse}
+          suggestion={aiSuggestedResponse}
           onUseSuggestion={handleUseSuggestion}
         />
       )}
@@ -334,16 +573,6 @@ export default function ConversationView({
       <div className="px-4 py-3 border-t border-border bg-black">
         <div className="flex items-center gap-2">
           <QuickReplyTemplates onSelectTemplate={handleQuickReply} />
-          {onSummarizeOrder && (
-            <button
-              onClick={() => onSummarizeOrder(conversation.id)}
-              className="w-10 h-10 rounded-full bg-primary/10 hover:bg-primary/20 flex items-center justify-center flex-shrink-0 transition-colors"
-              data-testid="button-summarize"
-              title="Summarize Order"
-            >
-              <Sparkles className="w-5 h-5 text-primary" />
-            </button>
-          )}
           <div className="flex-1 flex items-center gap-2 bg-muted rounded-full px-4 py-2">
             <input
               type="text"

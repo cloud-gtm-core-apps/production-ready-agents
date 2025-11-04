@@ -28,6 +28,12 @@ const openai = new OpenAI({
 // Store conversation contexts for AI conversations
 const aiConversationContexts = new Map<string, Array<{ role: 'system' | 'user' | 'assistant', content: string }>>();
 
+// Debounce timers for automatic order detection (2 seconds after last message)
+const orderDetectionTimers = new Map<string, NodeJS.Timeout>();
+
+// Store active WebSocket connections per userId for broadcasting updates
+const userWebSockets = new Map<string, Set<WebSocket>>();
+
 // Cache for menu items with expiration (1 day)
 interface MenuItemCache {
   items: Array<{ name: string; price: string; category: string | null }>;
@@ -294,6 +300,98 @@ function formatOrderMessage(orderDetails: { customerName: string; items: string[
   return message;
 }
 
+// Helper function to generate AI suggested response
+async function generateAISuggestedResponse(
+  messages: Message[],
+  userId: string,
+  orderId: string,
+  ws?: WebSocket
+): Promise<void> {
+  try {
+    // Format conversation for AI analysis
+    const conversationText = messages.map(msg => {
+      const sender = msg.isOutgoing ? 'Customer' : 'Restaurant';
+      return `${sender}: ${msg.text}`;
+    }).join('\n');
+
+    const systemPrompt = `You are helping a restaurant manager named Rod write responses to customers. Generate a short, natural, human-sounding response based on the conversation.
+
+Guidelines:
+- Keep it brief (under 40 words, ideally 10-20 words)
+- Sound natural and casual, like a real person texting
+- Be helpful but not overly excited or enthusiastic
+- Use normal, everyday language - no exclamation points unless truly needed
+- Match the tone of the conversation - if customer is casual, be casual
+- Don't be overly formal or corporate-sounding
+- Just provide the response text itself - no prefixes or labels
+
+Think: "How would a real restaurant manager text back to a customer?" - natural, brief, helpful.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Conversation:\n${conversationText}\n\nGenerate a short response suggestion for Rod to send to the customer.` }
+      ],
+      temperature: 0.7,
+      max_tokens: 100,
+    });
+
+    const suggestedResponse = completion.choices[0].message.content?.trim() || '';
+
+    if (suggestedResponse) {
+      console.log(`[AI Suggested Response] Generated suggestion for order ${orderId}: ${suggestedResponse.substring(0, 50)}...`);
+
+      // Broadcast to all WebSocket connections for this user
+      const userWs = userWebSockets.get(userId);
+      if (userWs && userWs.size > 0) {
+        userWs.forEach((clientWs) => {
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'ai_suggested_response',
+              orderId: orderId,
+              suggestion: suggestedResponse,
+              timestamp: new Date().toISOString(),
+            }));
+          }
+        });
+        console.log(`[AI Suggested Response] ✓ Broadcasted to ${userWs.size} WebSocket connection(s) for order ${orderId}`);
+      } else if (ws && ws.readyState === WebSocket.OPEN) {
+        // Fallback to provided WebSocket
+        ws.send(JSON.stringify({
+          type: 'ai_suggested_response',
+          orderId: orderId,
+          suggestion: suggestedResponse,
+          timestamp: new Date().toISOString(),
+        }));
+        console.log(`[AI Suggested Response] ✓ Sent via provided WebSocket for order ${orderId}`);
+      }
+    }
+  } catch (error) {
+    console.error(`[AI Suggested Response] Error generating suggestion for order ${orderId}:`, error);
+    // Don't throw - this is a non-critical feature
+  }
+}
+
+// Helper function to trigger debounced order detection
+function triggerDebouncedOrderDetection(userId: string, orderId: string, ws?: WebSocket) {
+  // Clear existing timer if any
+  const existingTimer = orderDetectionTimers.get(orderId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  // Set new timer for 2 seconds
+  const timer = setTimeout(async () => {
+    console.log(`[Order Detection] Debounce timer expired for order ${orderId}, triggering analysis...`);
+    await checkForOrderDetection(userId, orderId, ws);
+    orderDetectionTimers.delete(orderId);
+  }, 2000); // 2 second debounce
+
+  orderDetectionTimers.set(orderId, timer);
+  console.log(`[Order Detection] Debounce timer started for order ${orderId} (2 seconds)`);
+}
+
 // Helper function to check for order detection asynchronously
 async function checkForOrderDetection(
   userId: string,
@@ -335,18 +433,18 @@ async function checkForOrderDetection(
           return;
         }
 
-        // Check if order already exists
-        const orderAlreadyExists = order.orderMade === true;
-        const existingAIOrganizedMessage = messages.find(msg => msg.isAIOrganized === true);
-
-        // If order already exists, we only proceed if we want to check for pickup time updates
-        if (orderAlreadyExists && !existingAIOrganizedMessage) {
-          console.log(`[Order Detection] Order ${orderId} already has orderMade=true but no AI organized message, skipping`);
+        // Check if there are any customer messages (isOutgoing: true)
+        // If only restaurant messages exist, skip order detection (no customer input yet)
+        const hasCustomerMessages = messages.some(msg => msg.isOutgoing === true);
+        if (!hasCustomerMessages) {
+          console.log(`[Order Detection] No customer messages in conversation yet, skipping (only restaurant messages)`);
           resolve();
           return;
         }
 
-        console.log(`[Order Detection] Order ${orderId} has orderMade=${order.orderMade}, proceeding with analysis`);
+        // Always analyze - customer could change their mind, so AI should always listen
+        const existingAIOrganizedMessage = messages.find(msg => msg.isAIOrganized === true);
+        console.log(`[Order Detection] Order ${orderId}, proceeding with analysis (always listening)`);
 
         // Get menu items with caching for context
         const menuItems = await getMenuItemsWithCache(userId);
@@ -381,97 +479,27 @@ async function checkForOrderDetection(
             hasPickupTime: hasPickupTime
           });
 
-          // If order already exists, check if pickup time has changed
-          if (orderAlreadyExists && existingAIOrganizedMessage) {
-            // Extract existing pickup time from AI organized message
-            const existingPickupTimeMatch = existingAIOrganizedMessage.text.match(/Pickup Time:\s*(.+?)(?:\n|$)/i);
-            const existingPickupTime = existingPickupTimeMatch ? existingPickupTimeMatch[1].trim() : null;
+          // Always create a NEW AI organized message bubble (don't update existing ones)
+          // This allows users to see the order history as it changes
+          {
 
-            // Only update if pickup time has changed
-            if (hasPickupTime && pickupTimeValue !== existingPickupTime) {
-              console.log(`[Order Detection] Pickup time changed from "${existingPickupTime}" to "${pickupTimeValue}", updating AI organized message...`);
-
-              // Update the existing AI organized message with new pickup time
-              const updatedMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
-
-              // Update the message in the messages array
-              const updatedMessages = messages.map(msg =>
-                msg.id === existingAIOrganizedMessage.id
-                  ? { ...msg, text: updatedMessageText, timestamp: new Date().toISOString() }
-                  : msg
-              );
-
-              // Update conversation with new messages array
-              const updatedConversation = await storage.getOrderConversation(userId, orderId);
-              if (updatedConversation) {
-                await db.update(orderConversations)
-                  .set({
-                    messages: updatedMessages,
-                    updatedAt: new Date()
-                  })
-                  .where(and(
-                    eq(orderConversations.userId, userId),
-                    eq(orderConversations.orderId, orderId)
-                  ));
-              }
-
-              // Update pickup time detected flag
-              await storage.updatePickupTimeDetected(orderId, true);
-
-              // Send updated pickup time to frontend via WebSocket
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'pickup_time_detected',
-                  orderId: orderId,
-                  pickupTime: pickupTimeValue,
-                  timestamp: new Date().toISOString(),
-                }));
-                console.log(`[Order Detection] ✓ Sent updated pickup time "${pickupTimeValue}" to frontend for order ${orderId}`);
-
-                // Also send the updated AI organized message
-                ws.send(JSON.stringify({
-                  type: 'message_received',
-                  text: updatedMessageText,
-                  timestamp: new Date().toISOString(),
-                  isAIOrganized: true,
-                }));
-                console.log(`[Order Detection] ✓ Sent updated AI organized message via WebSocket for order ${orderId}`);
-              }
-
-              console.log(`[Order Detection] ✓ Pickup time updated successfully for order ${orderId}`);
-              resolve();
-              return;
-            } else {
-              console.log(`[Order Detection] Pickup time unchanged (${pickupTimeValue}), skipping update`);
-              resolve();
-              return;
-            }
-          }
-
-          // If order doesn't exist yet, create it normally
-          if (!orderAlreadyExists) {
-            // Final check before creating message
-            const finalOrderCheck = await storage.getOrderById(userId, orderId);
-            if (finalOrderCheck && finalOrderCheck.orderMade === true) {
-              console.log(`[Order Detection] Order ${orderId} was processed by another process, skipping`);
-              resolve();
-              return;
-            }
-
-            // Format and save AI organized message
+            // Format and create NEW AI organized message (always create new, never update existing)
             const orderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
-            console.log(`[Order Detection] Formatted order message for order ${orderId}:`, orderMessageText.substring(0, 100));
+            console.log(`[Order Detection] Creating NEW AI organized message for order ${orderId}:`, orderMessageText.substring(0, 100));
+            if (existingAIOrganizedMessage) {
+              console.log(`[Order Detection] Previous AI organized message exists, creating new one instead of updating`);
+            }
 
             const orderMessage: Message = {
-              id: randomUUID(),
+              id: randomUUID(), // Always generate new ID for new message bubble
               text: orderMessageText,
               isOutgoing: false,
               timestamp: new Date().toISOString(),
               isAIOrganized: true,
             };
 
-            // Save the AI organized message
-            console.log(`[Order Detection] Saving AI organized message to database for order ${orderId}...`);
+            // Save the NEW AI organized message (adds to conversation, doesn't replace)
+            console.log(`[Order Detection] Saving NEW AI organized message to database for order ${orderId}...`);
             await storage.addMessageToOrder(userId, orderId, orderMessage);
 
             // Update orderMade flag
@@ -501,21 +529,43 @@ async function checkForOrderDetection(
 
             console.log(`[Order Detection] ✓ Order detected and message saved successfully for order ${orderId}`);
 
-            // Send to client via WebSocket if available and open
-            if (ws) {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'message_received',
-                  text: orderMessageText,
-                  timestamp: orderMessage.timestamp,
-                  isAIOrganized: true,
-                }));
-                console.log(`[Order Detection] ✓ Sent AI organized message via WebSocket for order ${orderId}`);
-              } else {
-                console.log(`[Order Detection] WebSocket not open (state: ${ws.readyState}) for order ${orderId}, message saved to DB only`);
-              }
-            } else {
-              console.log(`[Order Detection] No WebSocket provided for order ${orderId}, message saved to DB only`);
+            // ALWAYS broadcast new AI organized message to all active WebSocket connections
+            const userWs = userWebSockets.get(userId);
+            let broadcastSent = false;
+
+            if (userWs && userWs.size > 0) {
+              let sentCount = 0;
+              userWs.forEach((clientWs) => {
+                if (clientWs.readyState === WebSocket.OPEN) {
+                  clientWs.send(JSON.stringify({
+                    type: 'message_received',
+                    text: orderMessageText,
+                    timestamp: orderMessage.timestamp,
+                    isAIOrganized: true,
+                    orderId: orderId,
+                  }));
+                  sentCount++;
+                  broadcastSent = true;
+                }
+              });
+              console.log(`[Order Detection] ✓ Broadcasted AI organized message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
+            }
+
+            // Also try provided WebSocket as fallback
+            if (!broadcastSent && ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'message_received',
+                text: orderMessageText,
+                timestamp: orderMessage.timestamp,
+                isAIOrganized: true,
+                orderId: orderId,
+              }));
+              broadcastSent = true;
+              console.log(`[Order Detection] ✓ Sent AI organized message via WebSocket for order ${orderId}`);
+            }
+
+            if (!broadcastSent) {
+              console.log(`[Order Detection] ⚠️ No active WebSocket connections for userId ${userId}, message saved to DB only`);
             }
           }
         } else {
@@ -986,48 +1036,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Summarize order (manually trigger order detection)
-  app.post("/api/orders/:orderId/summarize", isAuthenticated, async (req, res, next) => {
-    try {
-      const { orderId } = req.params;
-      const userId = (req.user as any).id;
-
-      const order = await storage.getOrderById(userId, orderId);
-      if (!order) {
-        return res.status(404).json({ message: 'Order not found' });
-      }
-
-      // Trigger order detection manually
-      console.log(`[API] Manual summarization requested for order ${orderId}`);
-      await checkForOrderDetection(userId, orderId);
-
-      // Wait a moment for updates to complete
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Check if pickup time was updated by looking at the conversation messages
-      const conversation = await storage.getOrderConversation(userId, orderId);
-      let updatedPickupTime: string | undefined;
-
-      if (conversation && conversation.messages) {
-        const messages = conversation.messages as Message[];
-        const aiOrganizedMessage = messages.find(msg => msg.isAIOrganized === true);
-        if (aiOrganizedMessage) {
-          const pickupTimeMatch = aiOrganizedMessage.text.match(/Pickup Time:\s*(.+?)(?:\n|$)/i);
-          if (pickupTimeMatch && pickupTimeMatch[1]) {
-            updatedPickupTime = pickupTimeMatch[1].trim();
-          }
-        }
-      }
-
-      res.json({
-        success: true,
-        message: 'Order summarization triggered',
-        pickupTime: updatedPickupTime
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
 
   // Send order to preparation (update status, create customer, stats, history)
   app.post("/api/orders/:orderId/send-to-preparation", isAuthenticated, async (req, res, next) => {
@@ -1202,7 +1210,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       await storage.addMessageToOrder(userId, orderId, rodMessage);
       await storage.updateOrderLastMessage(orderId, new Date());
-      // Note: Order detection happens after AI/customer responds, not after Rod sends
+
+      // Trigger debounced order detection after Rod's message
+      triggerDebouncedOrderDetection(userId, orderId);
+
+      // Generate AI suggested response asynchronously
+      (async () => {
+        try {
+          const conversation = await storage.getOrderConversation(userId, orderId);
+          if (conversation) {
+            const allMessages = (conversation.messages as Message[]) || [];
+            await generateAISuggestedResponse(allMessages, userId, orderId);
+          }
+        } catch (error) {
+          console.error(`[REST API] Error generating AI suggested response:`, error);
+        }
+      })();
 
       // Check if this is an AI test conversation
       const context = aiConversationContexts.get(orderId);
@@ -1242,17 +1265,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.addMessageToOrder(userId, orderId, aiMessage);
         await storage.updateOrderLastMessage(orderId, new Date());
 
-        // Check for pickup time detection automatically (independent of order detection)
-        console.log(`[API] Triggering automatic pickup time detection check for order ${orderId} after AI response`);
-        checkForPickupTimeDetection(userId, orderId);
+        // Trigger debounced order detection after AI response
+        triggerDebouncedOrderDetection(userId, orderId);
 
-        // Note: Order detection is now manual - user clicks the Summarizer button
+        // Generate AI suggested response asynchronously
+        (async () => {
+          try {
+            const conversation = await storage.getOrderConversation(userId, orderId);
+            if (conversation) {
+              const allMessages = (conversation.messages as Message[]) || [];
+              await generateAISuggestedResponse(allMessages, userId, orderId);
+            }
+          } catch (error) {
+            console.error(`[REST API] Error generating AI suggested response:`, error);
+          }
+        })();
       } else {
         // Regular chat (non-AI) - customer messages come from external sources
-        // Check for pickup time detection automatically when customer messages are received
-        console.log(`[API] Triggering automatic pickup time detection check for order ${orderId} after customer message`);
-        checkForPickupTimeDetection(userId, orderId);
-        // Order detection will be triggered when user clicks Summarizer button
+        // Trigger debounced order detection when customer messages are received
+        triggerDebouncedOrderDetection(userId, orderId);
+
+        // Generate AI suggested response asynchronously
+        (async () => {
+          try {
+            const conversation = await storage.getOrderConversation(userId, orderId);
+            if (conversation) {
+              const allMessages = (conversation.messages as Message[]) || [];
+              await generateAISuggestedResponse(allMessages, userId, orderId);
+            }
+          } catch (error) {
+            console.error(`[REST API] Error generating AI suggested response:`, error);
+          }
+        })();
       }
 
       res.json({ success: true });
@@ -1424,6 +1468,14 @@ Start the conversation now by texting your order.`;
     const userId = (ws as any).userId;
     console.log('WebSocket client connected to test simulator, userId:', userId);
 
+    // Add WebSocket to user's connection set for broadcasting updates
+    if (userId) {
+      if (!userWebSockets.has(userId)) {
+        userWebSockets.set(userId, new Set());
+      }
+      userWebSockets.get(userId)!.add(ws);
+    }
+
     ws.on('message', async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
@@ -1484,132 +1536,192 @@ Start the conversation now by texting your order.`;
             customerName: `${firstName} ${lastName}`,
           }));
 
-        } else if (type === 'summarize') {
-          // Manual order summarization triggered by user
-          console.log(`[WebSocket] Manual summarization requested for order ${orderId}`);
-          await checkForOrderDetection(userId, orderId, ws);
-
-          // Note: Pickup time detection runs automatically on every message, so we don't need to trigger it here
-          // But if order detection found a pickup time, it will have set the flag, so pickup time detection will skip
 
         } else if (type === 'send_message') {
-          // Rod sends a message to the AI customer
-          const context = aiConversationContexts.get(orderId);
-
-          if (!context) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Conversation not found' }));
+          // Rod sends a message - support both AI test conversations and regular conversations
+          if (!orderId || !text || !text.trim()) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Missing orderId or message text' }));
             return;
           }
 
-          // Save Rod's message (only if it's not empty)
-          if (text && text.trim()) {
-            const rodMessage: Message = {
-              id: randomUUID(),
-              text: text.trim(),
-              isOutgoing: false,
-              timestamp: new Date().toISOString(),
-            };
-            await storage.addMessageToOrder(userId, orderId, rodMessage);
-            await storage.updateOrderLastMessage(orderId, new Date());
-            // Note: Order detection happens after AI/customer responds, not after Rod sends
+          // Verify order exists
+          const order = await storage.getOrderById(userId, orderId);
+          if (!order) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Order not found' }));
+            return;
           }
 
-          // Add Rod's message to context (use the text or a default prompt if empty)
-          const contextMessage = text && text.trim()
-            ? `Rod (restaurant manager) says: ${text.trim()}`
-            : "Rod (restaurant manager) sent the initial greeting";
-          context.push({
-            role: 'user',
-            content: contextMessage
-          });
-
-          // Create a placeholder message ID for the streaming response
-          const aiMessageId = randomUUID();
-
-          // Send initial message signal to create placeholder on client
-          ws.send(JSON.stringify({
-            type: 'message_stream_start',
-            messageId: aiMessageId,
+          // Save Rod's message to database immediately
+          const rodMessageId = randomUUID();
+          const rodMessage: Message = {
+            id: rodMessageId,
+            text: text.trim(),
+            isOutgoing: false,
             timestamp: new Date().toISOString(),
+          };
+          await storage.addMessageToOrder(userId, orderId, rodMessage);
+          await storage.updateOrderLastMessage(orderId, new Date());
+
+          // Send Rod's message immediately to frontend so it appears instantly
+          ws.send(JSON.stringify({
+            type: 'message_sent',
+            messageId: rodMessageId,
+            text: text.trim(),
+            timestamp: rodMessage.timestamp,
+            orderId: orderId,
           }));
 
-          // Get AI response with streaming
-          const stream = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: context,
-            temperature: 0.9,
-            max_tokens: 150,
-            stream: true,
-          });
+          // Trigger debounced order detection after Rod's message
+          triggerDebouncedOrderDetection(userId, orderId, ws);
 
-          let aiResponse = '';
+          // Generate AI suggested response asynchronously with a delay
+          // Delay it to avoid interfering with the AI response that's about to stream
+          setTimeout(async () => {
+            try {
+              const conversation = await storage.getOrderConversation(userId, orderId);
+              if (conversation) {
+                const allMessages = (conversation.messages as Message[]) || [];
+                await generateAISuggestedResponse(allMessages, userId, orderId, ws);
+              }
+            } catch (error) {
+              console.error(`[WebSocket] Error generating AI suggested response:`, error);
+            }
+          }, 1000); // Delay to let AI response start streaming first
 
-          // Stream chunks to client
-          for await (const chunk of stream) {
-            const content = chunk.choices[0]?.delta?.content || '';
-            if (content) {
-              aiResponse += content;
-              // Send each chunk to client
+          // Check if this is an AI test conversation
+          const context = aiConversationContexts.get(orderId);
+
+          if (context) {
+            // This is an AI conversation - get streaming AI response
+
+            // Add Rod's message to context
+            const contextMessage = `Rod (restaurant manager) says: ${text.trim()}`;
+            context.push({
+              role: 'user',
+              content: contextMessage
+            });
+
+            // Create a placeholder message ID for the streaming response
+            const aiMessageId = randomUUID();
+
+            // Send initial message signal to create placeholder on client
+            ws.send(JSON.stringify({
+              type: 'message_stream_start',
+              messageId: aiMessageId,
+              orderId: orderId,
+              timestamp: new Date().toISOString(),
+            }));
+
+            // Get AI response with streaming
+            const stream = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: context,
+              temperature: 0.9,
+              max_tokens: 150,
+              stream: true,
+            });
+
+            let aiResponse = '';
+
+            // Stream chunks to client
+            for await (const chunk of stream) {
+              const content = chunk.choices[0]?.delta?.content || '';
+              if (content) {
+                aiResponse += content;
+                // Send each chunk to client
+                ws.send(JSON.stringify({
+                  type: 'message_stream_chunk',
+                  messageId: aiMessageId,
+                  orderId: orderId,
+                  text: content,
+                }));
+              }
+            }
+
+            // If no response, use default
+            if (!aiResponse) {
+              aiResponse = "Thanks!";
               ws.send(JSON.stringify({
                 type: 'message_stream_chunk',
                 messageId: aiMessageId,
-                text: content,
+                orderId: orderId,
+                text: aiResponse,
               }));
             }
-          }
 
-          // If no response, use default
-          if (!aiResponse) {
-            aiResponse = "Thanks!";
+            // Send stream complete signal
             ws.send(JSON.stringify({
-              type: 'message_stream_chunk',
+              type: 'message_stream_complete',
               messageId: aiMessageId,
-              text: aiResponse,
+              orderId: orderId,
+              timestamp: new Date().toISOString(),
             }));
-          }
 
-          // Send stream complete signal
-          ws.send(JSON.stringify({
-            type: 'message_stream_complete',
-            messageId: aiMessageId,
-            timestamp: new Date().toISOString(),
-          }));
+            // Add AI response to context
+            context.push({
+              role: 'assistant',
+              content: aiResponse
+            });
 
-          // Add AI response to context
-          context.push({
-            role: 'assistant',
-            content: aiResponse
-          });
-
-          // Save AI response to database (always save, even if empty)
-          const finalAiResponse = aiResponse || "Thanks!";
-          const aiMessage: Message = {
-            id: aiMessageId,
-            text: finalAiResponse,
-            isOutgoing: true,
-            timestamp: new Date().toISOString(),
-          };
-          try {
-            console.log(`[WebSocket] Saving AI response to database for order ${orderId}: ${finalAiResponse.substring(0, 50)}...`);
-            await storage.addMessageToOrder(userId, orderId, aiMessage);
-            await storage.updateOrderLastMessage(orderId, new Date());
-            console.log(`[WebSocket] AI response saved successfully to order ${orderId}`);
-          } catch (saveError) {
-            console.error(`[WebSocket] Error saving AI response for order ${orderId}:`, saveError);
-            // Try to send error to client
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: 'Failed to save AI response to database'
-              }));
+            // Save AI response to database (always save, even if empty)
+            const finalAiResponse = aiResponse || "Thanks!";
+            const aiMessage: Message = {
+              id: aiMessageId,
+              text: finalAiResponse,
+              isOutgoing: true,
+              timestamp: new Date().toISOString(),
+            };
+            try {
+              console.log(`[WebSocket] Saving AI response to database for order ${orderId}: ${finalAiResponse.substring(0, 50)}...`);
+              await storage.addMessageToOrder(userId, orderId, aiMessage);
+              await storage.updateOrderLastMessage(orderId, new Date());
+              console.log(`[WebSocket] AI response saved successfully to order ${orderId}`);
+            } catch (saveError) {
+              console.error(`[WebSocket] Error saving AI response for order ${orderId}:`, saveError);
+              // Try to send error to client
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'error',
+                  message: 'Failed to save AI response to database'
+                }));
+              }
             }
+
+            // Trigger debounced order detection after AI response is saved
+            // This will analyze the conversation after 2 seconds of no new messages
+            triggerDebouncedOrderDetection(userId, orderId, ws);
+
+            // Generate AI suggested response asynchronously with a delay to avoid blocking/interfering with message display
+            // This runs independently and doesn't block the AI response streaming
+            setTimeout(async () => {
+              try {
+                const conversation = await storage.getOrderConversation(userId, orderId);
+                if (conversation) {
+                  const allMessages = (conversation.messages as Message[]) || [];
+                  await generateAISuggestedResponse(allMessages, userId, orderId, ws);
+                }
+              } catch (error) {
+                console.error(`[WebSocket] Error generating AI suggested response:`, error);
+              }
+            }, 500); // Small delay to let the AI message display smoothly first
+          } else {
+            // Regular conversation (not AI test) - no AI response needed
+            // Message is already saved and sent to frontend above
+            console.log(`[WebSocket] Message sent to regular conversation ${orderId}, no AI response`);
+
+            // Generate AI suggested response asynchronously with a small delay
+            setTimeout(async () => {
+              try {
+                const conversation = await storage.getOrderConversation(userId, orderId);
+                if (conversation) {
+                  const allMessages = (conversation.messages as Message[]) || [];
+                  await generateAISuggestedResponse(allMessages, userId, orderId, ws);
+                }
+              } catch (error) {
+                console.error(`[WebSocket] Error generating AI suggested response:`, error);
+              }
+            }, 300); // Small delay for regular conversations
           }
-
-          // Check for pickup time detection automatically (independent of order detection)
-          console.log(`[WebSocket] Triggering automatic pickup time detection check for order ${orderId} after AI response`);
-          checkForPickupTimeDetection(userId, orderId, ws);
-
-          // Note: Order detection is now manual - user clicks the Summarizer button
         }
       } catch (error: any) {
         console.error('WebSocket error:', error);
@@ -1619,6 +1731,13 @@ Start the conversation now by texting your order.`;
 
     ws.on('close', () => {
       console.log('WebSocket client disconnected');
+      // Remove WebSocket from user's connection set
+      if (userId && userWebSockets.has(userId)) {
+        userWebSockets.get(userId)!.delete(ws);
+        if (userWebSockets.get(userId)!.size === 0) {
+          userWebSockets.delete(userId);
+        }
+      }
     });
   });
 
