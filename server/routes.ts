@@ -11,6 +11,7 @@ import { sessionMiddleware } from "./index";
 import { randomUUID } from "crypto";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
+import { users } from "@shared/schema";
 
 // Middleware to check if user is authenticated
 export const isAuthenticated = (req: any, res: any, next: any) => {
@@ -305,13 +306,14 @@ async function generateAISuggestedResponse(
   messages: Message[],
   userId: string,
   orderId: string,
-  ws?: WebSocket
-): Promise<void> {
+  ws?: WebSocket,
+  shouldBroadcast: boolean = true
+): Promise<string | null> {
   try {
     // Only generate suggestions when the last message is from the customer (not the owner)
     // isOutgoing: true = Customer messages, isOutgoing: false = Restaurant/Owner messages
     if (messages.length === 0) {
-      return; // No messages, nothing to suggest
+      return null; // No messages, nothing to suggest
     }
 
     // Get the last message (most recent)
@@ -321,13 +323,13 @@ async function generateAISuggestedResponse(
     // Only generate suggestions for customer messages (isOutgoing: true)
     if (!lastMessage.isOutgoing) {
       console.log(`[AI Suggested Response] Skipping - last message is from restaurant/owner, not generating suggestion`);
-      return;
+      return null;
     }
 
     // Also skip AI organized messages (they're system messages, not customer messages)
     if ((lastMessage as any).isAIOrganized) {
       console.log(`[AI Suggested Response] Skipping - last message is AI organized message, not generating suggestion`);
-      return;
+      return null;
     }
 
     // Format conversation for AI analysis
@@ -364,34 +366,41 @@ Think: "How would a real restaurant manager text back to a customer?" - natural,
     if (suggestedResponse) {
       console.log(`[AI Suggested Response] Generated suggestion for order ${orderId}: ${suggestedResponse.substring(0, 50)}...`);
 
-      // Broadcast to all WebSocket connections for this user
-      const userWs = userWebSockets.get(userId);
-      if (userWs && userWs.size > 0) {
-        userWs.forEach((clientWs) => {
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({
-              type: 'ai_suggested_response',
-              orderId: orderId,
-              suggestion: suggestedResponse,
-              timestamp: new Date().toISOString(),
-            }));
-          }
-        });
-        console.log(`[AI Suggested Response] ✓ Broadcasted to ${userWs.size} WebSocket connection(s) for order ${orderId}`);
-      } else if (ws && ws.readyState === WebSocket.OPEN) {
-        // Fallback to provided WebSocket
-        ws.send(JSON.stringify({
-          type: 'ai_suggested_response',
-          orderId: orderId,
-          suggestion: suggestedResponse,
-          timestamp: new Date().toISOString(),
-        }));
-        console.log(`[AI Suggested Response] ✓ Sent via provided WebSocket for order ${orderId}`);
+      // Broadcast to WebSocket connections only if shouldBroadcast is true
+      if (shouldBroadcast) {
+        const userWs = userWebSockets.get(userId);
+        if (userWs && userWs.size > 0) {
+          userWs.forEach((clientWs) => {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'ai_suggested_response',
+                orderId: orderId,
+                suggestion: suggestedResponse,
+                timestamp: new Date().toISOString(),
+              }));
+            }
+          });
+          console.log(`[AI Suggested Response] ✓ Broadcasted to ${userWs.size} WebSocket connection(s) for order ${orderId}`);
+        } else if (ws && ws.readyState === WebSocket.OPEN) {
+          // Fallback to provided WebSocket
+          ws.send(JSON.stringify({
+            type: 'ai_suggested_response',
+            orderId: orderId,
+            suggestion: suggestedResponse,
+            timestamp: new Date().toISOString(),
+          }));
+          console.log(`[AI Suggested Response] ✓ Sent via provided WebSocket for order ${orderId}`);
+        }
       }
+
+      return suggestedResponse;
     }
+
+    return null;
   } catch (error) {
     console.error(`[AI Suggested Response] Error generating suggestion for order ${orderId}:`, error);
     // Don't throw - this is a non-critical feature
+    return null;
   }
 }
 
@@ -1253,7 +1262,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // 3. Create order history entry
-      await storage.createOrderHistory({
+      const orderHistoryEntry = await storage.createOrderHistory({
         customerId: customer.id,
         orderSummary: orderDetails || {
           items: order.items || [],
@@ -1264,6 +1273,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes: orderDetails?.notes || order.notes || null,
         status: 'Confirmed',
       });
+
+      // Trigger refresh of popularity aggregates for this order's date
+      try {
+        const orderDate = new Date(orderHistoryEntry.createdAt);
+        const startDate = new Date(orderDate);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(orderDate);
+        endDate.setHours(23, 59, 59, 999);
+        await storage.refreshMenuItemPopularityAggregates(userId, startDate, endDate);
+      } catch (error) {
+        console.error('Error refreshing aggregates after order creation:', error);
+        // Don't fail the request if aggregate refresh fails
+      }
 
       // 4. Update order status, price, pickup time, items, and notes
       const updateData: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date } = {};
@@ -1329,6 +1351,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Mark order as ready for pickup
+  app.post("/api/orders/:orderId/mark-ready", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      // Get the order
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      // Update order status to Ready
+      await storage.updateOrderStatus(orderId, 'Ready');
+
+      // Find the customer for this order
+      const customer = await storage.getCustomerByPhoneNumber(userId, order.number);
+      if (customer) {
+        // Get the latest order history entry for this customer
+        const latestHistory = await storage.getLatestOrderHistoryByCustomer(customer.id);
+        if (latestHistory) {
+          // Update the latest order history status to Ready
+          await storage.updateOrderHistory(latestHistory.id, {
+            status: 'Ready',
+          });
+          console.log(`[Mark Ready] Updated order history ${latestHistory.id} to Ready for customer ${customer.id}`);
+        } else {
+          console.log(`[Mark Ready] No order history found for customer ${customer.id}`);
+        }
+      } else {
+        console.log(`[Mark Ready] No customer found for order ${orderId} with phone ${order.number}`);
+      }
+
+      res.json({ success: true, message: 'Order marked as ready' });
+    } catch (error) {
+      console.error('Error marking order as ready:', error);
+      next(error);
+    }
+  });
+
+  // Mark order as picked up (completed)
+  app.post("/api/orders/:orderId/mark-picked-up", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      // Get the order
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      // Update order status to Completed and update lastMessage to track completion date
+      await storage.updateOrderStatus(orderId, 'Completed');
+      await storage.updateOrderLastMessage(orderId, new Date());
+
+      // Find the customer for this order
+      const customer = await storage.getCustomerByPhoneNumber(userId, order.number);
+      if (customer) {
+        // Get the latest order history entry for this customer
+        const latestHistory = await storage.getLatestOrderHistoryByCustomer(customer.id);
+        if (latestHistory) {
+          // Update the latest order history status to Completed
+          await storage.updateOrderHistory(latestHistory.id, {
+            status: 'Completed',
+          });
+          console.log(`[Mark Picked Up] Updated order history ${latestHistory.id} to Completed for customer ${customer.id}`);
+        } else {
+          console.log(`[Mark Picked Up] No order history found for customer ${customer.id}`);
+        }
+      } else {
+        console.log(`[Mark Picked Up] No customer found for order ${orderId} with phone ${order.number}`);
+      }
+
+      res.json({ success: true, message: 'Order marked as picked up' });
+    } catch (error) {
+      console.error('Error marking order as picked up:', error);
+      next(error);
+    }
+  });
+
+  // Get order history with pagination
+  app.get("/api/order-history", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+
+      const result = await storage.getOrderHistoryPaginated(userId, page, limit);
+
+      res.json(result);
+    } catch (error) {
+      console.error('Error fetching order history:', error);
+      next(error);
+    }
+  });
+
   // Delete an order
   app.delete("/api/orders/:orderId", isAuthenticated, async (req, res, next) => {
     try {
@@ -1338,6 +1457,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deleteOrder(userId, orderId);
       res.json({ message: 'Order deleted successfully' });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  // Generate AI suggested response for a conversation
+  app.post("/api/orders/:orderId/generate-suggestion", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      // Get the conversation
+      const conversation = await storage.getOrderConversation(userId, orderId);
+      if (!conversation) {
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+
+      const messages = (conversation.messages as Message[]) || [];
+
+      // Generate AI suggested response (don't broadcast via WebSocket, just return it)
+      const suggestedResponse = await generateAISuggestedResponse(messages, userId, orderId, undefined, false);
+
+      // Return in API response - client will display it directly
+      res.json({ success: true, suggestion: suggestedResponse });
+    } catch (error) {
+      console.error('Error generating AI suggested response:', error);
       next(error);
     }
   });
@@ -1381,6 +1525,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (conversation) {
             const allMessages = (conversation.messages as Message[]) || [];
             await generateAISuggestedResponse(allMessages, userId, orderId);
+            console.log("AI suggested response generated");
           }
         } catch (error) {
           console.error(`[REST API] Error generating AI suggested response:`, error);
@@ -1435,6 +1580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (conversation) {
               const allMessages = (conversation.messages as Message[]) || [];
               await generateAISuggestedResponse(allMessages, userId, orderId);
+              console.log("AI suggested response generated");
             }
           } catch (error) {
             console.error(`[REST API] Error generating AI suggested response:`, error);
@@ -1899,6 +2045,87 @@ Start the conversation now by texting your order.`;
         }
       }
     });
+  });
+
+  // Set up periodic refresh for menu item popularity aggregates (every 15 minutes)
+  setInterval(async () => {
+    try {
+      // Get all users and refresh their aggregates
+      const allUsers = await db.select().from(users);
+      for (const user of allUsers) {
+        try {
+          await storage.refreshMenuItemPopularityAggregates(user.id);
+        } catch (error) {
+          console.error(`Error refreshing aggregates for user ${user.id}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Error in periodic aggregate refresh:', error);
+    }
+  }, 15 * 60 * 1000); // 15 minutes
+
+  // Refresh aggregates on server start for all users
+  (async () => {
+    try {
+      const allUsers = await db.select().from(users);
+      for (const user of allUsers) {
+        try {
+          await storage.refreshMenuItemPopularityAggregates(user.id);
+        } catch (error) {
+          console.error(`Error refreshing aggregates for user ${user.id} on startup:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Error in startup aggregate refresh:', error);
+    }
+  })();
+
+  // API endpoint to manually refresh aggregates
+  app.post("/api/analytics/refresh-aggregates", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+      const { startDate, endDate } = req.body;
+
+      const start = startDate ? new Date(startDate) : undefined;
+      const end = endDate ? new Date(endDate) : undefined;
+
+      console.log(`[Analytics] Manual refresh requested for user ${userId}`);
+      await storage.refreshMenuItemPopularityAggregates(userId, start, end);
+      res.json({ message: "Aggregates refreshed successfully" });
+    } catch (error) {
+      console.error('Error refreshing aggregates:', error);
+      next(error);
+    }
+  });
+
+  // API endpoint to get menu item popularity data
+  app.get("/api/analytics/popularity", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+      const { startDate, endDate, groupBy = 'day' } = req.query;
+
+      if (!startDate || !endDate) {
+        return res.status(400).json({ message: "startDate and endDate are required" });
+      }
+
+      const start = new Date(startDate as string);
+      const end = new Date(endDate as string);
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+
+      if (!['day', 'week', 'month'].includes(groupBy as string)) {
+        return res.status(400).json({ message: "groupBy must be 'day', 'week', or 'month'" });
+      }
+
+      const data = await storage.getMenuItemPopularity(userId, start, end, groupBy as 'day' | 'week' | 'month');
+      console.log(`[Analytics] Returning ${data.length} data points for user ${userId}`);
+      res.json(data);
+    } catch (error) {
+      console.error('Error fetching popularity data:', error);
+      next(error);
+    }
   });
 
   return httpServer;

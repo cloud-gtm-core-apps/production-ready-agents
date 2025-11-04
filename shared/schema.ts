@@ -110,12 +110,27 @@ export const customerStats = pgTable("customer_stats", {
   totalSpent: numeric("total_spent", { precision: 10, scale: 2 }).default("0.00"),
 });
 
+// Menu item popularity aggregates table (pre-aggregated for fast queries)
+// Note: Unique constraint on (user_id, menu_item_id, date) should be created via migration
+// since menu_item_id can be NULL, we'll handle uniqueness in application logic
+export const menuItemPopularityAggregates = pgTable("menu_item_popularity_aggregates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  menuItemId: varchar("menu_item_id").references(() => menuItems.id),
+  menuItemName: text("menu_item_name").notNull(), // Store name for historical tracking
+  date: timestamp("date").notNull(), // Date of the aggregation (day granularity)
+  orderCount: integer("order_count").notNull().default(0), // Number of times this item was ordered on this date
+  quantity: integer("quantity").notNull().default(0), // Total quantity ordered on this date
+  lastUpdated: timestamp("last_updated").notNull().default(sql`now()`),
+});
+
 export const insertOrderSchema = createInsertSchema(orders);
 export const insertOrderConversationSchema = createInsertSchema(orderConversations);
 export const insertMenuItemSchema = createInsertSchema(menuItems);
 export const insertCustomerSchema = createInsertSchema(customers);
 export const insertOrderHistorySchema = createInsertSchema(orderHistory);
 export const insertCustomerStatsSchema = createInsertSchema(customerStats);
+export const insertMenuItemPopularityAggregateSchema = createInsertSchema(menuItemPopularityAggregates);
 
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
@@ -129,6 +144,8 @@ export type OrderHistory = typeof orderHistory.$inferSelect;
 export type InsertOrderHistory = z.infer<typeof insertOrderHistorySchema>;
 export type CustomerStats = typeof customerStats.$inferSelect;
 export type InsertCustomerStats = z.infer<typeof insertCustomerStatsSchema>;
+export type MenuItemPopularityAggregate = typeof menuItemPopularityAggregates.$inferSelect;
+export type InsertMenuItemPopularityAggregate = z.infer<typeof insertMenuItemPopularityAggregateSchema>;
 
 // Message conversation types for in-memory storage
 export const messageSchema = z.object({

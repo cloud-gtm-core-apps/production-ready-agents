@@ -10,6 +10,8 @@ import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import NotFound from "@/pages/not-found";
 import MenuManagement from "@/pages/MenuManagement";
+import OrderHistory from "@/pages/OrderHistory";
+import Analytics from "@/pages/Analytics";
 
 function Router() {
   return (
@@ -18,6 +20,8 @@ function Router() {
       <Route path="/settings" component={Settings} />
       <Route path="/menu" component={MenuManagement} />
       <Route path="/ai-test" component={AITestSimulator} />
+      <Route path="/order-history" component={OrderHistory} />
+      <Route path="/analytics" component={Analytics} />
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route component={NotFound} />

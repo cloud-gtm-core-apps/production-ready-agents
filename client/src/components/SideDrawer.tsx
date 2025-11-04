@@ -25,6 +25,12 @@ export default function SideDrawer({ isOpen, onClose }: SideDrawerProps) {
     } else if (section === 'menu') {
       setLocation('/menu');
       onClose();
+    } else if (section === 'history') {
+      setLocation('/order-history');
+      onClose();
+    } else if (section === 'analytics') {
+      setLocation('/analytics');
+      onClose();
     } else if (section === 'signin') {
       setLocation('/login');
       onClose();

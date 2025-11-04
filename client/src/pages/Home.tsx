@@ -163,16 +163,56 @@ export default function Home() {
     setViewingConversationId(null);
   };
 
-  const handleMarkReady = (conversationId: string) => {
-    // TODO: Call API to update order status
-    console.log('Mark ready:', conversationId);
-    setViewingConversationId(null);
+  const handleMarkReady = async (conversationId: string) => {
+    try {
+      const response = await fetch(`/api/orders/${conversationId}/mark-ready`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        // Refresh query cache to update the UI
+        queryClient.removeQueries({ queryKey: ['/api/orders'] });
+        queryClient.removeQueries({ queryKey: ['/api/orders/counts'] });
+        
+        // Refetch conversations and counts
+        await Promise.all([
+          refetchConversations(),
+          refetchCounts(),
+        ]);
+      } else {
+        const error = await response.json();
+        alert(error.message || 'Failed to mark order as ready. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error marking order as ready:', error);
+      alert('Failed to mark order as ready. Please try again.');
+    }
   };
 
-  const handleMarkPickedUp = (conversationId: string) => {
-    // TODO: Call API to update order status
-    console.log('Mark picked up:', conversationId);
-    setViewingConversationId(null);
+  const handleMarkPickedUp = async (conversationId: string) => {
+    try {
+      const response = await fetch(`/api/orders/${conversationId}/mark-picked-up`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        // Refresh query cache to update the UI
+        queryClient.removeQueries({ queryKey: ['/api/orders'] });
+        queryClient.removeQueries({ queryKey: ['/api/orders/counts'] });
+        
+        // Refetch conversations and counts
+        await Promise.all([
+          refetchConversations(),
+          refetchCounts(),
+        ]);
+      } else {
+        const error = await response.json();
+        alert(error.message || 'Failed to mark order as picked up. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error marking order as picked up:', error);
+      alert('Failed to mark order as picked up. Please try again.');
+    }
   };
 
   const handleUpdateOrder = async (conversationId: string, orderDetails: any) => {

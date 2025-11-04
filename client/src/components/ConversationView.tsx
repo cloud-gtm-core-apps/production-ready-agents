@@ -53,6 +53,34 @@ export default function ConversationView({
     }
   }, [conversation.aiSuggestedResponse]);
   
+  // Fallback: Fetch AI suggested response from API if not received via WebSocket
+  // This handles cases where WebSocket messages might be missed (e.g., test conversations)
+  useEffect(() => {
+    // Only try to fetch if we don't have a suggestion yet
+    if (aiSuggestedResponse) return;
+    
+    // Wait 3 seconds after opening the conversation before trying the API fallback
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/orders/${conversation.id}/generate-suggestion`, {
+          method: 'POST',
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.suggestion) {
+            console.log(`[ConversationView] Fetched AI suggested response via API fallback for order ${conversation.id}: ${data.suggestion}`);
+            setAiSuggestedResponse(data.suggestion);
+          }
+        }
+      } catch (error) {
+        console.error(`[ConversationView] Error fetching AI suggested response via API:`, error);
+      }
+    }, 3000); // Wait 3 seconds for WebSocket message
+    
+    return () => clearTimeout(timer);
+  }, [conversation.id, aiSuggestedResponse]); // Only run when conversation.id changes
+  
   // Scroll to bottom when conversation opens or messages change
   useEffect(() => {
     // Small delay to ensure DOM is updated before scrolling for smoother animation
@@ -137,6 +165,16 @@ export default function ConversationView({
     const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // Log all WebSocket messages for debugging (filtered by orderId)
+        if (data.orderId === conversation.id || data.type === 'ai_suggested_response') {
+          console.log(`[ConversationView] WebSocket message received:`, {
+            type: data.type,
+            orderId: data.orderId,
+            conversationId: conversation.id,
+            matches: data.orderId === conversation.id,
+          });
+        }
         
         // Only handle messages for this conversation
         if (data.orderId !== conversation.id) return;

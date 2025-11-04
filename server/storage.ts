@@ -1,6 +1,7 @@
-import { type User, type InsertUser, type Order, type InsertOrder, type OrderConversation, type InsertOrderConversation, type MenuItem, type InsertMenuItem, type Customer, type InsertCustomer, type OrderHistory, type InsertOrderHistory, type CustomerStats, type InsertCustomerStats, type Message, users, orders, orderConversations, menuItems, customers, orderHistory, customerStats } from "@shared/schema";
+import { type User, type InsertUser, type Order, type InsertOrder, type OrderConversation, type InsertOrderConversation, type MenuItem, type InsertMenuItem, type Customer, type InsertCustomer, type OrderHistory, type InsertOrderHistory, type CustomerStats, type InsertCustomerStats, type MenuItemPopularityAggregate, type InsertMenuItemPopularityAggregate, type Message, users, orders, orderConversations, menuItems, customers, orderHistory, customerStats, menuItemPopularityAggregates } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, ne } from "drizzle-orm";
+import { eq, and, desc, sql, ne, gte, lt, lte, inArray, isNull } from "drizzle-orm";
+import postgres from "postgres";
 
 // modify the interface with any CRUD methods
 // you might need
@@ -35,6 +36,11 @@ export interface IStorage {
   createCustomerStats(customerId: string, stats: InsertCustomerStats): Promise<CustomerStats>;
   updateCustomerStats(customerId: string, stats: Partial<InsertCustomerStats>): Promise<void>;
   createOrderHistory(history: InsertOrderHistory): Promise<OrderHistory>;
+  getLatestOrderHistoryByCustomer(customerId: string): Promise<OrderHistory | undefined>;
+  updateOrderHistory(historyId: string, updates: Partial<InsertOrderHistory>): Promise<void>;
+  getOrderHistoryPaginated(userId: string, page: number, limit: number): Promise<{ orders: Array<OrderHistory & { customer?: Customer }>; total: number; hasMore: boolean }>;
+  refreshMenuItemPopularityAggregates(userId: string, startDate?: Date, endDate?: Date): Promise<void>;
+  getMenuItemPopularity(userId: string, startDate: Date, endDate: Date, groupBy: 'day' | 'week' | 'month'): Promise<Array<{ date: string; items: Array<{ menuItemName: string; orderCount: number; quantity: number }> }>>;
 }
 
 export class DbStorage implements IStorage {
@@ -54,6 +60,28 @@ export class DbStorage implements IStorage {
   }
 
   async getOrdersByStatus(userId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<Order[]> {
+    // For completed orders, only show orders completed today
+    if (status === 'Completed') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Start of today
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1); // Start of tomorrow
+      
+      // Filter completed orders by lastMessage date being today
+      // This is a reasonable proxy - if the order was last active today, it was likely completed today
+      const result = await db.select()
+        .from(orders)
+        .where(and(
+          eq(orders.userId, userId),
+          eq(orders.status, status),
+          gte(orders.lastMessage, today),
+          lt(orders.lastMessage, tomorrow)
+        ))
+        .orderBy(desc(orders.lastMessage));
+      return result;
+    }
+    
+    // For other statuses, return all orders with that status
     const result = await db.select()
       .from(orders)
       .where(and(
@@ -69,11 +97,24 @@ export class DbStorage implements IStorage {
       .from(orders)
       .where(eq(orders.userId, userId));
     
+    // For completed count, only count orders completed today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Start of today
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1); // Start of tomorrow
+    
+    const completedToday = allOrders.filter(o => {
+      if (o.status !== 'Completed') return false;
+      if (!o.lastMessage) return false;
+      const lastMessageDate = new Date(o.lastMessage);
+      return lastMessageDate >= today && lastMessageDate < tomorrow;
+    });
+    
     return {
       new: allOrders.filter(o => o.status === 'New').length,
       confirmed: allOrders.filter(o => o.status === 'Confirmed').length,
       ready: allOrders.filter(o => o.status === 'Ready').length,
-      completed: allOrders.filter(o => o.status === 'Completed').length,
+      completed: completedToday.length,
     };
   }
 
@@ -350,6 +391,318 @@ export class DbStorage implements IStorage {
       .values(history)
       .returning();
     return result[0];
+  }
+
+  async getLatestOrderHistoryByCustomer(customerId: string): Promise<OrderHistory | undefined> {
+    const result = await db.select()
+      .from(orderHistory)
+      .where(eq(orderHistory.customerId, customerId))
+      .orderBy(desc(orderHistory.createdAt))
+      .limit(1);
+    return result[0];
+  }
+
+  async updateOrderHistory(historyId: string, updates: Partial<InsertOrderHistory>): Promise<void> {
+    await db.update(orderHistory)
+      .set(updates)
+      .where(eq(orderHistory.id, historyId));
+  }
+
+  async getOrderHistoryPaginated(userId: string, page: number, limit: number): Promise<{ orders: Array<OrderHistory & { customer?: Customer }>; total: number; hasMore: boolean }> {
+    // Get order history entries with customer information
+    // We need to join with customers table, but customers are linked by customerId
+    // First get all customers for this user, then get their order history
+    const userCustomers = await db.select()
+      .from(customers)
+      .where(eq(customers.userId, userId));
+
+    const customerIds = userCustomers.map(c => c.id);
+    
+    if (customerIds.length === 0) {
+      return { orders: [], total: 0, hasMore: false };
+    }
+
+    // Get total count
+    const totalResult = await db.select({ count: sql<number>`count(*)` })
+      .from(orderHistory)
+      .where(inArray(orderHistory.customerId, customerIds));
+    
+    const total = Number(totalResult[0]?.count || 0);
+
+    // Get paginated order history with customer info
+    const offset = (page - 1) * limit;
+    const historyEntries = await db.select()
+      .from(orderHistory)
+      .where(inArray(orderHistory.customerId, customerIds))
+      .orderBy(desc(orderHistory.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    // Map customer info to each history entry
+    const ordersWithCustomers = historyEntries.map(entry => {
+      const customer = userCustomers.find(c => c.id === entry.customerId);
+      return {
+        ...entry,
+        customer
+      };
+    });
+
+    const hasMore = offset + limit < total;
+
+    return {
+      orders: ordersWithCustomers,
+      total,
+      hasMore
+    };
+  }
+
+  async refreshMenuItemPopularityAggregates(userId: string, startDate?: Date, endDate?: Date): Promise<void> {
+    // If no dates provided, refresh last 90 days
+    const end = endDate || new Date();
+    const start = startDate || new Date();
+    if (!startDate) {
+      start.setDate(start.getDate() - 90);
+    }
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+
+    console.log(`[Analytics] Refreshing aggregates for user ${userId} from ${start.toISOString()} to ${end.toISOString()}`);
+
+    // Get all order history entries for this user's customers within date range
+    const userCustomers = await db.select()
+      .from(customers)
+      .where(eq(customers.userId, userId));
+
+    if (userCustomers.length === 0) {
+      console.log(`[Analytics] No customers found for user ${userId}`);
+      return;
+    }
+
+    const customerIds = userCustomers.map(c => c.id);
+    console.log(`[Analytics] Found ${customerIds.length} customers`);
+
+    // Get order history entries within date range
+    const orderHistories = await db.select()
+      .from(orderHistory)
+      .where(and(
+        inArray(orderHistory.customerId, customerIds),
+        gte(orderHistory.createdAt, start),
+        lte(orderHistory.createdAt, end)
+      ));
+
+    console.log(`[Analytics] Found ${orderHistories.length} order history entries`);
+
+    // Get all menu items for this user to match item names (do once outside loop)
+    const allMenuItems = await db.select()
+      .from(menuItems)
+      .where(eq(menuItems.userId, userId));
+
+    // Process each order history entry and aggregate by date and menu item
+    const aggregatesMap = new Map<string, { userId: string; menuItemId: string | null; menuItemName: string; date: Date; orderCount: number; quantity: number }>();
+
+    for (const history of orderHistories) {
+      const orderSummary = history.orderSummary as any;
+      const items = orderSummary?.items || [];
+      
+      if (!items || items.length === 0) {
+        console.log(`[Analytics] Order history ${history.id} has no items`);
+        continue;
+      }
+
+      const orderDate = new Date(history.createdAt);
+      // Normalize to start of day for daily aggregation
+      orderDate.setHours(0, 0, 0, 0);
+      
+      console.log(`[Analytics] Processing order ${history.id} with ${items.length} items on ${orderDate.toISOString()}`);
+
+      for (const itemStr of items) {
+        // Parse item string (could be "Item Name", "2x Item Name", "Item Name: $5.00", etc.)
+        const quantityMatch = itemStr.match(/^(\d+)x\s*(.+?)(?:\s*:\s*\$|$)/i);
+        const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
+        const itemName = quantityMatch ? quantityMatch[2].trim() : itemStr.split(':')[0].trim();
+
+        // Try to find matching menu item
+        let menuItem = allMenuItems.find(mi => 
+          mi.name.toLowerCase() === itemName.toLowerCase() ||
+          itemName.toLowerCase().includes(mi.name.toLowerCase()) ||
+          mi.name.toLowerCase().includes(itemName.toLowerCase())
+        );
+
+        const menuItemId = menuItem?.id || null;
+        const menuItemName = menuItem?.name || itemName;
+
+        // Create key for aggregate: userId_menuItemId_date
+        const key = `${userId}_${menuItemId || itemName}_${orderDate.toISOString().split('T')[0]}`;
+
+        if (aggregatesMap.has(key)) {
+          const existing = aggregatesMap.get(key)!;
+          existing.orderCount += 1;
+          existing.quantity += quantity;
+        } else {
+          aggregatesMap.set(key, {
+            userId,
+            menuItemId,
+            menuItemName,
+            date: new Date(orderDate),
+            orderCount: 1,
+            quantity,
+          });
+        }
+      }
+    }
+
+    console.log(`[Analytics] Created ${aggregatesMap.size} aggregates to upsert`);
+
+    // Upsert aggregates into database
+    // Use raw SQL client for proper ON CONFLICT handling
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL not set');
+    }
+    const sqlClient = postgres(process.env.DATABASE_URL);
+    
+    try {
+      let upserted = 0;
+      for (const aggregate of aggregatesMap.values()) {
+        // Check if record exists first (handling NULL menu_item_id)
+        let existing;
+        if (aggregate.menuItemId === null) {
+          existing = await sqlClient`
+            SELECT id, order_count, quantity FROM menu_item_popularity_aggregates
+            WHERE user_id = ${aggregate.userId}
+              AND menu_item_id IS NULL
+              AND DATE(date) = DATE(${aggregate.date})
+              AND menu_item_name = ${aggregate.menuItemName}
+            LIMIT 1
+          `;
+        } else {
+          existing = await sqlClient`
+            SELECT id, order_count, quantity FROM menu_item_popularity_aggregates
+            WHERE user_id = ${aggregate.userId}
+              AND menu_item_id = ${aggregate.menuItemId}
+              AND DATE(date) = DATE(${aggregate.date})
+              AND menu_item_name = ${aggregate.menuItemName}
+            LIMIT 1
+          `;
+        }
+
+        if (existing.length > 0) {
+          // Update existing
+          await sqlClient`
+            UPDATE menu_item_popularity_aggregates
+            SET order_count = order_count + ${aggregate.orderCount},
+                quantity = quantity + ${aggregate.quantity},
+                last_updated = NOW()
+            WHERE id = ${existing[0].id}
+          `;
+        } else {
+          // Insert new - handle NULL menu_item_id explicitly
+          if (aggregate.menuItemId === null) {
+            await sqlClient`
+              INSERT INTO menu_item_popularity_aggregates (user_id, menu_item_id, menu_item_name, date, order_count, quantity, last_updated)
+              VALUES (${aggregate.userId}, NULL, ${aggregate.menuItemName}, ${aggregate.date}, ${aggregate.orderCount}, ${aggregate.quantity}, NOW())
+            `;
+          } else {
+            await sqlClient`
+              INSERT INTO menu_item_popularity_aggregates (user_id, menu_item_id, menu_item_name, date, order_count, quantity, last_updated)
+              VALUES (${aggregate.userId}, ${aggregate.menuItemId}, ${aggregate.menuItemName}, ${aggregate.date}, ${aggregate.orderCount}, ${aggregate.quantity}, NOW())
+            `;
+          }
+        }
+        upserted++;
+      }
+      console.log(`[Analytics] Successfully upserted ${upserted} aggregates`);
+    } finally {
+      await sqlClient.end();
+    }
+  }
+
+  async getMenuItemPopularity(userId: string, startDate: Date, endDate: Date, groupBy: 'day' | 'week' | 'month'): Promise<Array<{ date: string; items: Array<{ menuItemName: string; orderCount: number; quantity: number }> }>> {
+    // Normalize dates to start of day
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // Build SQL query based on groupBy
+    let dateGrouping: string;
+    switch (groupBy) {
+      case 'day':
+        dateGrouping = `DATE(date)`;
+        break;
+      case 'week':
+        dateGrouping = `DATE_TRUNC('week', date)`;
+        break;
+      case 'month':
+        dateGrouping = `DATE_TRUNC('month', date)`;
+        break;
+      default:
+        dateGrouping = `DATE(date)`;
+    }
+
+    // Get all aggregates for the date range
+    const allAggregates = await db.select()
+      .from(menuItemPopularityAggregates)
+      .where(and(
+        eq(menuItemPopularityAggregates.userId, userId),
+        gte(menuItemPopularityAggregates.date, start),
+        lte(menuItemPopularityAggregates.date, end)
+      ))
+      .orderBy(menuItemPopularityAggregates.date, menuItemPopularityAggregates.menuItemName);
+
+    // Group by date and aggregate
+    const groupedByDate = new Map<string, Map<string, { menuItemName: string; orderCount: number; quantity: number }>>();
+
+    for (const agg of allAggregates) {
+      const aggDate = new Date(agg.date);
+      let dateKey: string;
+      
+      switch (groupBy) {
+        case 'day':
+          dateKey = aggDate.toISOString().split('T')[0];
+          break;
+        case 'week':
+          // Get start of week (Monday)
+          const weekStart = new Date(aggDate);
+          const dayOfWeek = weekStart.getDay();
+          const diff = weekStart.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+          weekStart.setDate(diff);
+          weekStart.setHours(0, 0, 0, 0);
+          dateKey = weekStart.toISOString().split('T')[0];
+          break;
+        case 'month':
+          dateKey = `${aggDate.getFullYear()}-${String(aggDate.getMonth() + 1).padStart(2, '0')}-01`;
+          break;
+        default:
+          dateKey = aggDate.toISOString().split('T')[0];
+      }
+
+      if (!groupedByDate.has(dateKey)) {
+        groupedByDate.set(dateKey, new Map());
+      }
+
+      const dateMap = groupedByDate.get(dateKey)!;
+      const itemKey = agg.menuItemName;
+
+      if (dateMap.has(itemKey)) {
+        const existing = dateMap.get(itemKey)!;
+        existing.orderCount += agg.orderCount;
+        existing.quantity += agg.quantity;
+      } else {
+        dateMap.set(itemKey, {
+          menuItemName: agg.menuItemName,
+          orderCount: agg.orderCount,
+          quantity: agg.quantity,
+        });
+      }
+    }
+
+    // Convert to array and sort by date
+    return Array.from(groupedByDate.entries())
+      .map(([date, itemsMap]) => ({
+        date,
+        items: Array.from(itemsMap.values()).sort((a, b) => b.orderCount - a.orderCount), // Sort by order count descending
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 }
 
