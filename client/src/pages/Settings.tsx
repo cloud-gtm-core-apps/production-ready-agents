@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   ArrowLeft,
   User,
@@ -6,8 +6,10 @@ import {
   CreditCard,
   Phone,
   ExternalLink,
+  X,
 } from "lucide-react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import IPhoneFrame from "@/components/IPhoneFrame";
 import {
   Card,
@@ -35,6 +37,60 @@ export default function Settings() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [selectedIntegration, setSelectedIntegration] = useState<string>("");
+
+  // Check Clover connection status (always check on page load)
+  const { data: cloverStatus, refetch: refetchCloverStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ['/api/integrations/clover/status'],
+  });
+
+  const cloverConnected = cloverStatus?.connected || false;
+
+  // Auto-select Clover if connected
+  useEffect(() => {
+    if (cloverConnected && !selectedIntegration) {
+      setSelectedIntegration('clover');
+    }
+  }, [cloverConnected, selectedIntegration]);
+
+  // Handle OAuth callback success/error messages
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const success = searchParams.get('success');
+    const error = searchParams.get('error');
+    
+    if (success === 'clover_connected') {
+      // Refetch connection status after successful connection
+      refetchCloverStatus();
+      // Clear the query params
+      window.history.replaceState({}, '', '/settings');
+    } else if (error) {
+      console.error('OAuth error:', error);
+      // You could show an error message to the user here
+      window.history.replaceState({}, '', '/settings');
+    }
+  }, [refetchCloverStatus]);
+
+  const handleCloverConnect = () => {
+    // Redirect to OAuth authorize endpoint
+    window.location.href = '/api/integrations/clover/authorize';
+  };
+
+  const handleCloverDisconnect = async () => {
+    try {
+      const response = await fetch('/api/integrations/clover/disconnect', {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        // Refetch connection status to update UI
+        refetchCloverStatus();
+      } else {
+        console.error('Failed to disconnect Clover');
+      }
+    } catch (error) {
+      console.error('Error disconnecting Clover:', error);
+    }
+  };
 
   return (
     <IPhoneFrame>
@@ -179,6 +235,55 @@ export default function Settings() {
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Connect your Square account to process payments
+                    </p>
+                  </>
+                )}
+
+                {selectedIntegration === "clover" && (
+                  <>
+                    <div className="flex items-center justify-between p-3 rounded-md border border-border bg-card hover-elevate">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center">
+                          <CreditCard className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                        <div>
+                          <p
+                            className="font-medium text-foreground"
+                            data-testid="text-clover-title"
+                          >
+                            Clover
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {cloverConnected ? "Connected to Clover" : "Payment processing"}
+                          </p>
+                        </div>
+                      </div>
+                      {cloverConnected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={handleCloverDisconnect}
+                          data-testid="button-disconnect-clover"
+                        >
+                          <X className="h-3 w-3 mr-1" />
+                          Disconnect
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCloverConnect}
+                          data-testid="button-connect-clover"
+                        >
+                          Connect
+                          <ExternalLink className="h-3 w-3 ml-1" />
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {cloverConnected 
+                        ? "Your Clover account is connected and ready to use"
+                        : "Connect your Clover account to process payments and sync orders"}
                     </p>
                   </>
                 )}

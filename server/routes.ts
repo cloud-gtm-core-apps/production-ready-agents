@@ -3,15 +3,15 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import passport from "./auth";
 import { storage } from "./storage";
-import { insertUserSchema, type Conversation, type Message, orderConversations } from "@shared/schema";
+import { insertUserSchema, type Conversation, type Message, type MenuItem, orderConversations } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
 import { WebSocketServer, WebSocket } from "ws";
 import { sessionMiddleware } from "./index";
-import { randomUUID } from "crypto";
+import { randomUUID, createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
-import { users } from "@shared/schema";
+import { users, oauthTokens, menuItemPopularityAggregates } from "@shared/schema";
 
 // Middleware to check if user is authenticated
 export const isAuthenticated = (req: any, res: any, next: any) => {
@@ -20,6 +20,49 @@ export const isAuthenticated = (req: any, res: any, next: any) => {
   }
   res.status(401).json({ message: "Unauthorized" });
 };
+
+// Encryption utilities for OAuth tokens
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || process.env.SESSION_SECRET || 'default-key-change-in-production';
+const ALGORITHM = 'aes-256-gcm';
+
+function getKey(): Buffer {
+  // Derive a 32-byte key from the encryption key
+  return scryptSync(ENCRYPTION_KEY, 'salt', 32);
+}
+
+function encrypt(text: string): string {
+  const key = getKey();
+  const iv = randomBytes(16);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+
+  const authTag = cipher.getAuthTag();
+
+  // Return iv:authTag:encrypted
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+}
+
+function decrypt(encryptedText: string): string {
+  const key = getKey();
+  const parts = encryptedText.split(':');
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted text format');
+  }
+
+  const iv = Buffer.from(parts[0], 'hex');
+  const authTag = Buffer.from(parts[1], 'hex');
+  const encrypted = parts[2];
+
+  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -2124,6 +2167,335 @@ Start the conversation now by texting your order.`;
       res.json(data);
     } catch (error) {
       console.error('Error fetching popularity data:', error);
+      next(error);
+    }
+  });
+
+  // Clover OAuth routes
+  // Initiate OAuth flow - redirect to Clover
+  app.get("/api/integrations/clover/authorize", isAuthenticated, async (req, res) => {
+    try {
+      const clientId = process.env.CLOVER_APP_ID;
+      if (!clientId) {
+        return res.status(500).json({ message: "Clover app ID not configured" });
+      }
+
+      const REDIRECT_URI = process.env.REDIRECT_URI;
+      const authUrl = `https://sandbox.dev.clover.com/oauth/authorize?client_id=${encodeURIComponent(clientId)}&response_type=code&redirect_uri=${REDIRECT_URI}`;
+
+      res.redirect(authUrl);
+    } catch (error) {
+      console.error('Error initiating Clover OAuth:', error);
+      res.status(500).json({ message: "Failed to initiate OAuth flow" });
+    }
+  });
+
+  // OAuth callback endpoint
+  app.get("/oauth/callback", async (req, res, next) => {
+    try {
+      const { code, error, merchant_id, client_id } = req.query;
+
+      if (error) {
+        console.error('OAuth error:', error);
+        return res.redirect('/settings?error=oauth_failed');
+      }
+
+      if (!code) {
+        return res.redirect('/settings?error=no_code');
+      }
+
+      const clientSecret = process.env.CLOVER_APP_SECRET;
+
+      if (!client_id || !clientSecret) {
+        console.error('Clover credentials not configured');
+        return res.redirect('/settings?error=config_error');
+      }
+
+      const tokenResponse = await fetch('https://apisandbox.dev.clover.com/oauth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          client_id: client_id as string,
+          client_secret: clientSecret,
+          code: code as string
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('Token exchange failed:', errorText);
+        return res.redirect('/settings?error=token_exchange_failed');
+      }
+
+      const tokenData = await tokenResponse.json();
+      console.log(`[OAuth] Full token response:`, JSON.stringify(tokenData, null, 2));
+
+      // Get user ID from session (user needs to be logged in)
+      if (!req.isAuthenticated()) {
+        return res.redirect('/login?redirect=/oauth/callback');
+      }
+
+      const userId = (req.user as any).id;
+
+      // Encrypt tokens before storing
+      const encryptedAccessToken = encrypt(tokenData.access_token);
+      const refreshToken = tokenData.refresh_token;
+      const encryptedRefreshToken = refreshToken ? encrypt(refreshToken) : null;
+      const expiresIn = tokenData.expires_in;
+      const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
+
+      // Check if token already exists for this user and provider
+      const existingToken = await db.select()
+        .from(oauthTokens)
+        .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+        .limit(1);
+
+      if (existingToken.length > 0) {
+        // Update existing token (preserve existing merchantId if new one is null)
+        await db.update(oauthTokens)
+          .set({
+            accessToken: encryptedAccessToken,
+            refreshToken: encryptedRefreshToken,
+            expiresAt: expiresAt,
+            merchantId: merchant_id as string,
+            updatedAt: new Date(),
+          })
+          .where(eq(oauthTokens.id, existingToken[0].id));
+      } else {
+        // Insert new token
+        await db.insert(oauthTokens).values({
+          userId,
+          provider: 'clover',
+          accessToken: encryptedAccessToken,
+          refreshToken: encryptedRefreshToken,
+          expiresAt: expiresAt,
+          merchantId: merchant_id as string,
+        });
+      }
+
+      res.redirect('/settings?success=clover_connected');
+    } catch (error) {
+      console.error('Error in OAuth callback:', error);
+      next(error);
+    }
+  });
+
+  // Check Clover connection status
+  app.get("/api/integrations/clover/status", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+
+      const token = await db.select()
+        .from(oauthTokens)
+        .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+        .limit(1);
+
+      res.json({ connected: token.length > 0 });
+    } catch (error) {
+      console.error('Error checking Clover status:', error);
+      next(error);
+    }
+  });
+
+  // Disconnect Clover (remove token)
+  app.delete("/api/integrations/clover/disconnect", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+
+      // Check if token exists before deleting
+      const existingToken = await db.select()
+        .from(oauthTokens)
+        .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+        .limit(1);
+
+      if (existingToken.length > 0) {
+        await db.delete(oauthTokens)
+          .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')));
+        console.log(`[OAuth] Clover token removed for user ${userId}`);
+      } else {
+        console.log(`[OAuth] No Clover token found to remove for user ${userId}`);
+      }
+
+      res.json({ success: true, message: "Clover disconnected successfully" });
+    } catch (error) {
+      console.error('Error disconnecting Clover:', error);
+      next(error);
+    }
+  });
+
+  // Sync menu items from Clover
+  app.post("/api/integrations/clover/sync-menu", isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as any).id;
+
+      // Get Clover token
+      const tokenRecord = await db.select()
+        .from(oauthTokens)
+        .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+        .limit(1);
+
+      if (!tokenRecord[0]) {
+        return res.status(401).json({ message: "Clover not connected" });
+      }
+
+      let accessToken = process.env.MERCHENT_API_KEY || "";
+
+      console.log(`[Clover Sync] Decrypted Access token: ${accessToken}`);
+      const merchantId = tokenRecord[0].merchantId || 'H4RW04034BGH1';
+
+      // First, delete all existing menu items to replace with fresh data
+      console.log(`[Clover Sync] Deleting all existing menu items for fresh sync...`);
+      const existingItems = await storage.getMenuItems(userId);
+
+      // Delete menu_item_popularity_aggregates first (due to foreign key constraint)
+      if (existingItems.length > 0) {
+        const menuItemIds = existingItems.map(item => item.id);
+        console.log(`[Clover Sync] Deleting popularity aggregates for ${menuItemIds.length} menu items...`);
+        await db.delete(menuItemPopularityAggregates)
+          .where(eq(menuItemPopularityAggregates.userId, userId));
+        console.log(`[Clover Sync] Deleted popularity aggregates`);
+      }
+
+      // Now delete menu items
+      let deletedCount = 0;
+      for (const existingItem of existingItems) {
+        try {
+          await storage.deleteMenuItem(userId, existingItem.id);
+          deletedCount++;
+        } catch (error) {
+          console.error(`Error deleting existing item ${existingItem.id}:`, error);
+        }
+      }
+      console.log(`[Clover Sync] Deleted ${deletedCount} of ${existingItems.length} existing menu items`);
+
+      // Verify deletion by fetching items again - should be empty
+      const remainingItems = await storage.getMenuItems(userId);
+      if (remainingItems.length > 0) {
+        console.warn(`[Clover Sync] Warning: ${remainingItems.length} items still remain after deletion. Attempting to delete again...`);
+        // Delete remaining items manually
+        for (const item of remainingItems) {
+          try {
+            await db.delete(menuItemPopularityAggregates)
+              .where(eq(menuItemPopularityAggregates.menuItemId, item.id));
+            await storage.deleteMenuItem(userId, item.id);
+          } catch (error) {
+            console.error(`Error deleting remaining item ${item.id}:`, error);
+          }
+        }
+      }
+
+      // Fetch all categories from Clover
+      console.log(`[Clover Sync] Fetching categories for merchant ${merchantId}`);
+      const categoriesResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/categories?limit=1000`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!categoriesResponse.ok) {
+        const errorText = await categoriesResponse.text();
+        const statusCode = categoriesResponse.status;
+        console.error(`[Clover Sync] Failed to fetch categories (${statusCode}):`, errorText);
+
+        if (statusCode === 401) {
+          return res.status(401).json({
+            message: "Unauthorized - Token may be invalid or expired. Please reconnect Clover in Settings.",
+            requiresReconnect: true,
+            statusCode
+          });
+        }
+
+        return res.status(500).json({
+          message: "Failed to fetch categories from Clover",
+          statusCode,
+          details: errorText
+        });
+      }
+
+      const categoriesData = await categoriesResponse.json();
+      const categories = categoriesData.elements || (Array.isArray(categoriesData) ? categoriesData : []);
+      console.log(`[Clover Sync] Found ${categories.length} categories`);
+
+      // Map Clover items to our menu items schema and save to database
+      const syncedItems: MenuItem[] = [];
+      const errors: string[] = [];
+
+      // For each category, fetch its items
+      for (const category of categories) {
+        try {
+          const categoryId = category.id;
+          const categoryName = category.name;
+
+          console.log(`[Clover Sync] Fetching items for category: ${categoryName} (${categoryId})`);
+
+          const categoryItemsResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/categories/${categoryId}/items?limit=1000`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Accept': 'application/json',
+            },
+          });
+
+          if (!categoryItemsResponse.ok) {
+            const errorText = await categoryItemsResponse.text();
+            console.error(`[Clover Sync] Failed to fetch items for category ${categoryName} (${categoryItemsResponse.status}):`, errorText);
+            errors.push(`Failed to fetch items for category "${categoryName}": ${errorText}`);
+            continue;
+          }
+
+          const categoryItemsData = await categoryItemsResponse.json();
+          const categoryItems = categoryItemsData.elements || (Array.isArray(categoryItemsData) ? categoryItemsData : []);
+          console.log(`[Clover Sync] Found ${categoryItems.length} items in category "${categoryName}"`);
+
+          // Process each item in this category
+          for (const cloverItem of categoryItems) {
+            try {
+              // Skip if item doesn't have a name or is hidden
+              if (!cloverItem.name || cloverItem.hidden === true) {
+                continue;
+              }
+
+              // Format price (Clover stores price in cents, convert to dollars)
+              const priceInCents = cloverItem.price || 0;
+              const priceInDollars = (priceInCents / 100).toFixed(2);
+              const formattedPrice = `$${priceInDollars}`;
+
+              // Create menu item with category
+              const newItem = await storage.createMenuItem(userId, {
+                name: cloverItem.name,
+                price: formattedPrice,
+                category: categoryName,
+                description: cloverItem.description || undefined,
+                imageUrl: cloverItem.imageHref || undefined,
+                isAvailable: !cloverItem.hidden,
+              } as any);
+              syncedItems.push(newItem);
+            } catch (error: any) {
+              console.error(`Error syncing item "${cloverItem.name}" in category "${categoryName}":`, error);
+              errors.push(`Failed to sync "${cloverItem.name}" in category "${categoryName}": ${error.message}`);
+            }
+          }
+        } catch (error: any) {
+          console.error(`Error processing category "${category.name}":`, error);
+          errors.push(`Failed to process category "${category.name}": ${error.message}`);
+        }
+      }
+
+      // Clear menu items cache
+      menuItemsCache.delete(userId);
+
+      res.json({
+        success: true,
+        synced: syncedItems.length,
+        items: syncedItems,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (error) {
+      console.error('Error syncing menu items from Clover:', error);
       next(error);
     }
   });

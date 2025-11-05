@@ -124,6 +124,19 @@ export const menuItemPopularityAggregates = pgTable("menu_item_popularity_aggreg
   lastUpdated: timestamp("last_updated").notNull().default(sql`now()`),
 });
 
+// OAuth tokens table - stores encrypted OAuth tokens for integrations
+export const oauthTokens = pgTable("oauth_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  provider: varchar("provider").notNull(), // e.g., 'clover'
+  accessToken: text("access_token").notNull(), // Encrypted token
+  refreshToken: text("refresh_token"), // Encrypted refresh token (if available)
+  expiresAt: timestamp("expires_at"), // Token expiration time (if available)
+  merchantId: varchar("merchant_id"), // Merchant ID associated with the token (e.g., Clover merchant ID)
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+
 export const insertOrderSchema = createInsertSchema(orders);
 export const insertOrderConversationSchema = createInsertSchema(orderConversations);
 export const insertMenuItemSchema = createInsertSchema(menuItems);
@@ -131,6 +144,7 @@ export const insertCustomerSchema = createInsertSchema(customers);
 export const insertOrderHistorySchema = createInsertSchema(orderHistory);
 export const insertCustomerStatsSchema = createInsertSchema(customerStats);
 export const insertMenuItemPopularityAggregateSchema = createInsertSchema(menuItemPopularityAggregates);
+export const insertOAuthTokenSchema = createInsertSchema(oauthTokens);
 
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
@@ -146,6 +160,8 @@ export type CustomerStats = typeof customerStats.$inferSelect;
 export type InsertCustomerStats = z.infer<typeof insertCustomerStatsSchema>;
 export type MenuItemPopularityAggregate = typeof menuItemPopularityAggregates.$inferSelect;
 export type InsertMenuItemPopularityAggregate = z.infer<typeof insertMenuItemPopularityAggregateSchema>;
+export type OAuthToken = typeof oauthTokens.$inferSelect;
+export type InsertOAuthToken = z.infer<typeof insertOAuthTokenSchema>;
 
 // Message conversation types for in-memory storage
 export const messageSchema = z.object({

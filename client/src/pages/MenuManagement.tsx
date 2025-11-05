@@ -122,10 +122,51 @@ export default function MenuManagement() {
     }
   };
 
-  const handleSyncSquare = () => {
-    // TODO: Implement Square sync functionality
-    alert('Square sync functionality coming soon!');
+  const handleSyncClover = async () => {
+    try {
+      const response = await fetch('/api/integrations/clover/sync-menu', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        let errorMessage = error.message || 'Failed to sync menu items from Clover. Please try again.';
+        
+        // If reconnection is required, provide helpful message
+        if (error.requiresReconnect) {
+          errorMessage += '\n\nPlease go to Settings and reconnect your Clover account.';
+        }
+        
+        const errorDetails = error.details ? `\n\nDetails: ${error.details}` : '';
+        const statusCode = error.statusCode ? `\n\nStatus Code: ${error.statusCode}` : '';
+        alert(`${errorMessage}${statusCode}${errorDetails}`);
+        return;
+      }
+
+      const result = await response.json();
+      
+      // Invalidate menu items query to refresh the list
+      queryClient.invalidateQueries({ queryKey: ['/api/menu-items'] });
+      
+      // Show success message
+      if (result.errors && result.errors.length > 0) {
+        alert(`Synced ${result.synced} items from Clover. Some errors occurred:\n${result.errors.join('\n')}`);
+      } else {
+        alert(`Successfully synced ${result.synced} menu items from Clover!`);
+      }
+    } catch (error) {
+      console.error('Error syncing menu items from Clover:', error);
+      alert('Failed to sync menu items from Clover. Please try again.');
+    }
   };
+
+  // Check Clover connection status
+  const { data: cloverStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ['/api/integrations/clover/status'],
+  });
+
+  const cloverConnected = cloverStatus?.connected || false;
 
   const categories = Array.from(new Set(menuItems.map(item => item.category).filter(Boolean)));
 
@@ -219,14 +260,16 @@ export default function MenuManagement() {
               <>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-foreground">Menu Items</h2>
-                  <Button 
-                    variant="outline" 
-                    onClick={handleSyncSquare}
-                    data-testid="button-sync-square"
-                  >
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Sync from Square
-                  </Button>
+                  {cloverConnected && (
+                    <Button 
+                      variant="outline" 
+                      onClick={handleSyncClover}
+                      data-testid="button-sync-clover"
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Sync from Clover
+                    </Button>
+                  )}
                 </div>
             {categories.length > 0 ? (
               categories.map(category => (

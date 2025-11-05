@@ -10,7 +10,7 @@ import TabBar from '@/components/TabBar';
 import SideDrawer from '@/components/SideDrawer';
 import type { Conversation } from '@shared/schema';
 
-type Tab = 'new' | 'confirmed' | 'ready' | 'completed';
+type Tab = 'new' | 'confirmed' | 'ready';
 
 const INITIAL_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
 
@@ -137,7 +137,7 @@ export default function Home() {
   }, [activeTab]);
 
   // Fetch counts for all tabs (no cache)
-  const { data: counts, refetch: refetchCounts } = useQuery<{ new: number; confirmed: number; ready: number; completed: number }>({
+  const { data: counts, refetch: refetchCounts } = useQuery<{ new: number; confirmed: number; ready: number }>({
     queryKey: ['/api/orders/counts'],
     enabled: isAuthenticated,
     staleTime: 0, // Always consider data stale
@@ -154,7 +154,6 @@ export default function Home() {
     new: 0,
     confirmed: 0,
     ready: 0,
-    completed: 0,
   };
 
   const handleConfirmOrder = (conversationId: string) => {

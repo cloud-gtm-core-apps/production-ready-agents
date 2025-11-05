@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
-type Tab = 'new' | 'confirmed' | 'ready' | 'completed';
+type Tab = 'new' | 'confirmed' | 'ready';
 
 interface TabBarProps {
   activeTab: Tab;
@@ -10,7 +10,6 @@ interface TabBarProps {
     new: number;
     confirmed: number;
     ready: number;
-    completed: number;
   };
 }
 
@@ -19,7 +18,6 @@ export default function TabBar({ activeTab, onTabChange, counts }: TabBarProps) 
     { id: 'new' as Tab, label: 'New', count: counts?.new || 0 },
     { id: 'confirmed' as Tab, label: 'Confirmed', count: counts?.confirmed || 0 },
     { id: 'ready' as Tab, label: 'Ready', count: counts?.ready || 0 },
-    { id: 'completed' as Tab, label: 'Completed', count: counts?.completed || 0 },
   ];
 
   return (
