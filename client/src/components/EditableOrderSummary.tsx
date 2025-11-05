@@ -4,6 +4,16 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Plus, Minus, X, Edit2, ArrowRight, XCircle, ChevronDown } from 'lucide-react';
 import type { OrderDetails } from '@shared/schema';
 
@@ -13,6 +23,7 @@ interface EditableOrderSummaryProps {
   detectedPickupTime?: string;
   onSave?: (updatedDetails: OrderDetails) => void;
   autoStartEditing?: boolean;
+  onCancelEditing?: () => void;
   itemsFromAI?: string[];
   notesFromAI?: string;
   pickupTimeFromAI?: string;
@@ -30,6 +41,7 @@ export default function EditableOrderSummary({
   detectedPickupTime,
   onSave,
   autoStartEditing = false,
+  onCancelEditing,
   itemsFromAI,
   notesFromAI,
   pickupTimeFromAI
@@ -37,6 +49,7 @@ export default function EditableOrderSummary({
   const [isEditing, setIsEditing] = useState(false);
   const [editedItems, setEditedItems] = useState<EditableItem[]>([]);
   const [editedNotes, setEditedNotes] = useState(orderDetails.notes || '');
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   
   // Helper to convert ISO string or formatted string to formatted time
   const formatPickupTime = (timeStr: string | null | undefined): string | null => {
@@ -84,9 +97,9 @@ export default function EditableOrderSummary({
     }
   }, [detectedPickupTime]);
 
-  // Handle auto-start editing
+  // Handle auto-start editing when Confirm Order button is clicked
   useEffect(() => {
-    if (autoStartEditing) {
+    if (autoStartEditing && !isEditing) {
       // Use AI data if available, otherwise use orderDetails
       const itemsToUse = itemsFromAI && itemsFromAI.length > 0 ? itemsFromAI : orderDetails.items;
       const notesToUse = notesFromAI !== undefined ? notesFromAI : (orderDetails.notes || '');
@@ -108,7 +121,7 @@ export default function EditableOrderSummary({
       })());
       setIsEditing(true);
     }
-  }, [autoStartEditing, itemsFromAI, notesFromAI, pickupTimeFromAI, detectedPickupTime, orderDetails]);
+  }, [autoStartEditing]); // Only depend on autoStartEditing, not on orderDetails or other props
 
   const parseItems = (items: string[]): EditableItem[] => {
     return items.map(item => {
@@ -162,6 +175,8 @@ export default function EditableOrderSummary({
   const cancelEditing = () => {
     setIsEditing(false);
     setNewItemName('');
+    // Notify parent to reset autoStartEditing so it can be triggered again
+    onCancelEditing?.();
   };
 
   const updateQuantity = (index: number, delta: number) => {
@@ -202,7 +217,61 @@ export default function EditableOrderSummary({
     setIsEditing(false);
   };
 
+  // Parse items to extract quantity, name, and price (moved outside conditional for reuse)
+  const parseItemForDisplay = (item: string): { quantity: string; name: string; price: string } => {
+    // Handle formats like "2x Item: $4.99" or "Item: $8.99" or "2x Item" or "Item"
+    const quantityMatch = item.match(/^(\d+)x\s/i);
+    const quantity = quantityMatch ? quantityMatch[1] : '1';
+    
+    // Remove quantity prefix
+    let itemWithoutQuantity = item.replace(/^\d+x\s+/i, '').trim();
+    
+    // Extract price if present
+    const priceMatch = itemWithoutQuantity.match(/:\s*\$([\d.]+)/);
+    const price = priceMatch ? `$${priceMatch[1]}` : '';
+    
+    // Extract item name (remove price part if present)
+    const name = itemWithoutQuantity.replace(/:\s*\$[\d.]+.*$/, '').trim();
+    
+    return { quantity, name, price };
+  };
+
   if (!isEditing) {
+    // Use items from orderDetails if available, otherwise fall back to itemsFromAI
+    const itemsToDisplay = (orderDetails.items && orderDetails.items.length > 0) 
+      ? orderDetails.items 
+      : (itemsFromAI && itemsFromAI.length > 0 ? itemsFromAI : []);
+
+    // Calculate total item count (handling quantities like "2x Item")
+    const itemCount = itemsToDisplay.reduce((total, item) => {
+      const quantityMatch = item.match(/^(\d+)x\s/i);
+      if (quantityMatch) {
+        return total + parseInt(quantityMatch[1]);
+      }
+      return total + 1;
+    }, 0);
+
+    // Format pickup time for summary
+    const timeToShow = detectedPickupTime || pickupTimeFromAI || orderDetails.pickupTime;
+    const formattedTime = timeToShow ? formatPickupTime(timeToShow) || timeToShow : 'Not set';
+
+    // Calculate total from items if not in orderDetails
+    let totalToDisplay = orderDetails.total;
+    if (!totalToDisplay && itemsToDisplay.length > 0) {
+      // Try to extract total from items
+      const totalMatch = itemsToDisplay.reduce((sum, item) => {
+        const priceMatch = item.match(/:\s*\$([\d.]+)/);
+        if (priceMatch) {
+          return sum + parseFloat(priceMatch[1]);
+        }
+        return sum;
+      }, 0);
+      totalToDisplay = totalMatch > 0 ? totalMatch.toFixed(2) : '0.00';
+    }
+
+    // Format summary text
+    const summaryText = `${itemCount} ${itemCount === 1 ? 'item' : 'items'} • Pickup Time ${formattedTime}`;
+
     return (
       <Card className="bg-card border-2 border-border">
         <div className="flex items-center justify-between p-4 pb-2">
@@ -210,7 +279,7 @@ export default function EditableOrderSummary({
             <div className="h-6 w-6 flex items-center justify-center">
               <ChevronDown className="w-4 h-4" />
             </div>
-            <h3 className="font-semibold text-sm text-foreground">Order Summary</h3>
+            <h3 className="text-xs font-medium text-muted-foreground">Order Summary</h3>
           </div>
           <div className="flex items-center gap-2">
             <Badge 
@@ -236,45 +305,26 @@ export default function EditableOrderSummary({
           </div>
         </div>
         
-        <div className="px-4 pb-2">
-          <div className="flex items-center gap-4">
-            <div>
-              <p className="text-[10px] text-muted-foreground">Pickup Time</p>
-              <p className="text-xs font-medium" data-testid="text-pickup-time">
-                {(() => {
-                  // Prioritize detected pickup time, then saved pickup time
-                  const timeToShow = detectedPickupTime || orderDetails.pickupTime;
-                  if (!timeToShow) return 'Not set';
-                  const formatted = formatPickupTime(timeToShow);
-                  return formatted || timeToShow; // Fallback to original if formatting fails
-                })()}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground">Total</p>
-              <p className="text-xs font-medium" data-testid="text-total">
-                ${orderDetails.total}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="space-y-2 px-4 mb-3">
-          {orderDetails.items.map((item, index) => (
-            <div key={index} className="text-sm text-foreground" data-testid={`text-item-${index}`}>
-              • {item}
-            </div>
-          ))}
-        </div>
-
-        {orderDetails.notes && (
-          <div className="mx-4 mb-3 p-2 bg-muted/50 rounded">
-            <p className="text-xs text-muted-foreground mb-1">Notes:</p>
-            <p className="text-sm text-foreground" data-testid="text-notes">
-              {orderDetails.notes}
-            </p>
+        {/* Items list */}
+        {itemsToDisplay.length > 0 && (
+          <div className="px-4 pb-2 space-y-1">
+            {itemsToDisplay.map((item, index) => {
+              const parsed = parseItemForDisplay(item);
+              return (
+                <div key={index} className="text-xs text-foreground" data-testid={`text-item-${index}`}>
+                  {parsed.quantity}x {parsed.name} {parsed.price}
+                </div>
+              );
+            })}
           </div>
         )}
+
+        {/* Summary footer */}
+        <div className="px-4 pb-3 pt-2 border-t border-border/50">
+          <p className="text-xs text-muted-foreground" data-testid="text-order-summary">
+            {summaryText}
+          </p>
+        </div>
       </Card>
     );
   }
@@ -429,7 +479,7 @@ export default function EditableOrderSummary({
         </Button>
         <Button
           className="flex-1"
-          onClick={saveChanges}
+          onClick={() => setShowConfirmDialog(true)}
           disabled={editedItems.length === 0}
           data-testid="button-save-edit"
         >
@@ -437,6 +487,29 @@ export default function EditableOrderSummary({
           <ArrowRight className="w-4 h-4" />
         </Button>
       </div>
+
+      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <AlertDialogContent className="max-w-[280px] p-4">
+          <AlertDialogHeader className="pb-2">
+            <AlertDialogTitle className="text-base">Send Order to Preparation?</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs">
+              Please make sure there are no mistakes before sending this order to preparation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-2 pt-2">
+            <AlertDialogCancel className="m-0 flex-1 text-xs h-8">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowConfirmDialog(false);
+                saveChanges();
+              }}
+              className="flex-1 text-xs h-8"
+            >
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

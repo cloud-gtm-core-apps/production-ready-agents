@@ -45,6 +45,7 @@ export default function ConversationView({
   const [isTyping, setIsTyping] = useState(false);
   const [aiSuggestedResponse, setAiSuggestedResponse] = useState<string | undefined>(conversation.aiSuggestedResponse);
   const displayName = conversation.customerName || conversation.phoneNumber;
+  const skipNextScrollRef = useRef(false);
   
   // Update aiSuggestedResponse when conversation prop changes
   useEffect(() => {
@@ -52,6 +53,7 @@ export default function ConversationView({
       setAiSuggestedResponse(conversation.aiSuggestedResponse);
     }
   }, [conversation.aiSuggestedResponse]);
+
   
   // Fallback: Fetch AI suggested response from API if not received via WebSocket
   // This handles cases where WebSocket messages might be missed (e.g., test conversations)
@@ -82,7 +84,14 @@ export default function ConversationView({
   }, [conversation.id, aiSuggestedResponse]); // Only run when conversation.id changes
   
   // Scroll to bottom when conversation opens or messages change
+  // Skip scrolling if it's just an orderDetails update (not new messages)
   useEffect(() => {
+    // Skip scroll if we're just updating orderDetails
+    if (skipNextScrollRef.current) {
+      skipNextScrollRef.current = false;
+      return;
+    }
+    
     // Small delay to ensure DOM is updated before scrolling for smoother animation
     const timer = setTimeout(() => {
       if (messagesEndRef.current) {
@@ -253,23 +262,51 @@ export default function ConversationView({
           
           // The useEffect above will remove the streaming message when it appears in conversation.messages
           // The debounced order detection will trigger on the server and send AI organized message if needed
-        } else if (data.type === 'message_received' && data.isAIOrganized) {
-          // AI organized message received - trigger refetch to show it
-          // This handles both new and updated AI organized messages
-          console.log(`[ConversationView] AI organized message received for order ${data.orderId}, refetching...`);
-          
-          // Clear all streaming messages before refetch to prevent duplicates
-          // The refetch will bring in all messages from DB including previously streamed ones
-          setStreamingMessages({});
-          
-          setTimeout(async () => {
-            // Refetch all order-related queries (matching query keys that start with '/api/orders')
-            await queryClient.refetchQueries({ 
-              queryKey: ['/api/orders'],
-              exact: false 
-            });
-            console.log(`[ConversationView] Refetched conversations after AI organized message`);
-          }, 300); // Slightly longer delay to ensure DB is updated
+        } else if (data.type === 'message_received') {
+          if (data.isAIOrganized) {
+            // AI organized message received - auto-fill form instead of showing in chat
+            console.log(`[ConversationView] AI organized message received for order ${data.orderId}, auto-filling form...`);
+            
+            // Clear all streaming messages before refetch to prevent duplicates
+            setStreamingMessages({});
+            
+            // Extract order data from WebSocket message (structured data preferred, fallback to parsing)
+            // This populates the collapsed view, but doesn't auto-expand the form
+            if (data.orderData) {
+              // Use structured data from server
+              setAiItems(data.orderData.items && data.orderData.items.length > 0 ? data.orderData.items : undefined);
+              setAiNotes(data.orderData.notes || undefined);
+              setAiPickupTime(data.orderData.pickupTime || undefined);
+            } else if (data.text) {
+              // Fallback: parse the formatted message text
+              const parsed = parseAIMessage(data.text);
+              setAiItems(parsed.items.length > 0 ? parsed.items : undefined);
+              setAiNotes(parsed.notes || undefined);
+              setAiPickupTime(parsed.pickupTime || undefined);
+            }
+            
+            // Skip scroll on next refetch since we're just updating orderDetails, not adding messages
+            skipNextScrollRef.current = true;
+            
+            // Refetch to update orderDetails in the conversation (silently, without scrolling)
+            setTimeout(async () => {
+              await queryClient.refetchQueries({ 
+                queryKey: ['/api/orders'],
+                exact: false 
+              });
+              console.log(`[ConversationView] Refetched conversations after AI organized message`);
+            }, 300);
+          } else {
+            // Regular message received (e.g., confirmation message) - refetch to show it
+            console.log(`[ConversationView] Regular message received for order ${data.orderId}, refetching conversations...`);
+            setTimeout(async () => {
+              await queryClient.refetchQueries({ 
+                queryKey: ['/api/orders'],
+                exact: false 
+              });
+              console.log(`[ConversationView] Refetched conversations after regular message`);
+            }, 300);
+          }
         } else if (data.type === 'ai_suggested_response') {
           // AI suggested response received - update local state
           console.log(`[ConversationView] AI suggested response received for order ${data.orderId}: ${data.suggestion}`);
@@ -414,6 +451,39 @@ export default function ConversationView({
     return { items, notes, pickupTime };
   };
 
+  // Extract items from existing AI organized messages when conversation loads
+  // This ensures the collapsed view shows items even if orderDetails is empty
+  useEffect(() => {
+    // Only extract if we don't already have AI items and orderDetails is empty
+    // Use a more specific check to avoid unnecessary re-runs
+    const hasOrderDetails = conversation.orderDetails && conversation.orderDetails.items && conversation.orderDetails.items.length > 0;
+    
+    if (!aiItems && !hasOrderDetails) {
+      const aiMessages = conversation.messages.filter(msg => msg.isAIOrganized === true);
+      
+      if (aiMessages.length > 0) {
+        // Sort by timestamp descending to get the latest one
+        const latestAIMessage = aiMessages.sort((a, b) => {
+          const timeA = new Date(a.timestamp).getTime();
+          const timeB = new Date(b.timestamp).getTime();
+          return timeB - timeA; // Descending order (newest first)
+        })[0];
+        
+        // Parse the latest AI message to extract items, notes, and pickup time
+        const parsed = parseAIMessage(latestAIMessage.text);
+        if (parsed.items.length > 0) {
+          setAiItems(parsed.items);
+        }
+        if (parsed.notes) {
+          setAiNotes(parsed.notes);
+        }
+        if (parsed.pickupTime) {
+          setAiPickupTime(parsed.pickupTime);
+        }
+      }
+    }
+  }, [conversation.id]); // Only run when conversation.id changes, not on every message/orderDetails update
+
   const handleConfirmOrder = () => {
     // Find the LATEST AI organized message (most recent timestamp)
     // Since we now create new messages instead of updating, we need the most recent one
@@ -434,7 +504,7 @@ export default function ConversationView({
       setAiPickupTime(parsed.pickupTime || undefined);
     }
     
-    // Expand and start editing (don't call onConfirmOrder yet - that will happen on save)
+    // Expand the form and populate with AI data when Confirm Order is clicked
     setAutoStartEditing(true);
   };
 
@@ -526,6 +596,7 @@ export default function ConversationView({
           });
           
           // Merge all messages (conversation, optimistic, streaming) and sort by timestamp
+          // Filter out AI organized messages - they are not displayed in chat, only used for auto-filling form
           const allMessages: Array<{
             id: string;
             text: string;
@@ -536,13 +607,15 @@ export default function ConversationView({
             isStreaming?: boolean;
             isVisible?: boolean;
           }> = [
-            ...conversation.messages.map(m => ({
-              id: m.id,
-              text: m.text,
-              isOutgoing: m.isOutgoing,
-              timestamp: m.timestamp,
-              isAIOrganized: m.isAIOrganized,
-            })),
+            ...conversation.messages
+              .filter(m => !m.isAIOrganized) // Hide AI organized messages from chat
+              .map(m => ({
+                id: m.id,
+                text: m.text,
+                isOutgoing: m.isOutgoing,
+                timestamp: m.timestamp,
+                isAIOrganized: m.isAIOrganized,
+              })),
             ...optimisticMessages.filter(m => {
               // Filter out optimistic messages that already exist in conversation
               const text = m.text.trim().toLowerCase();
@@ -639,6 +712,7 @@ export default function ConversationView({
             detectedPickupTime={detectedPickupTime}
             onSave={handleSaveOrder}
             autoStartEditing={autoStartEditing}
+            onCancelEditing={() => setAutoStartEditing(false)}
             itemsFromAI={aiItems}
             notesFromAI={aiNotes}
             pickupTimeFromAI={aiPickupTime}

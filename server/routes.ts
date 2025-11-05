@@ -742,38 +742,53 @@ async function checkForOrderDetection(
             console.log(`[Order Detection] ✓ Order detected and message saved successfully for order ${orderId}`);
 
             // ALWAYS broadcast new AI organized message to all active WebSocket connections
+            // Send structured order data for auto-filling the form (message text is still saved but not displayed)
             const userWs = userWebSockets.get(userId);
             let broadcastSent = false;
 
-            if (userWs && userWs.size > 0) {
-              let sentCount = 0;
-              userWs.forEach((clientWs) => {
-                if (clientWs.readyState === WebSocket.OPEN) {
-                  clientWs.send(JSON.stringify({
-                    type: 'message_received',
-                    text: orderMessageText,
-                    timestamp: orderMessage.timestamp,
-                    isAIOrganized: true,
-                    orderId: orderId,
-                  }));
-                  sentCount++;
-                  broadcastSent = true;
-                }
-              });
-              console.log(`[Order Detection] ✓ Broadcasted AI organized message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
-            }
+            // Ensure orderDetails exists (it should at this point, but TypeScript needs the check)
+            const orderDetails = analysis.orderDetails;
+            if (orderDetails) {
+              if (userWs && userWs.size > 0) {
+                let sentCount = 0;
+                userWs.forEach((clientWs) => {
+                  if (clientWs.readyState === WebSocket.OPEN) {
+                    clientWs.send(JSON.stringify({
+                      type: 'message_received',
+                      text: orderMessageText,
+                      timestamp: orderMessage.timestamp,
+                      isAIOrganized: true,
+                      orderId: orderId,
+                      orderData: {
+                        items: orderDetails.items,
+                        notes: orderDetails.notes,
+                        pickupTime: orderDetails.pickupTime,
+                      },
+                    }));
+                    sentCount++;
+                    broadcastSent = true;
+                  }
+                });
+                console.log(`[Order Detection] ✓ Broadcasted AI organized message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
+              }
 
-            // Also try provided WebSocket as fallback
-            if (!broadcastSent && ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'message_received',
-                text: orderMessageText,
-                timestamp: orderMessage.timestamp,
-                isAIOrganized: true,
-                orderId: orderId,
-              }));
-              broadcastSent = true;
-              console.log(`[Order Detection] ✓ Sent AI organized message via WebSocket for order ${orderId}`);
+              // Also try provided WebSocket as fallback
+              if (!broadcastSent && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'message_received',
+                  text: orderMessageText,
+                  timestamp: orderMessage.timestamp,
+                  isAIOrganized: true,
+                  orderId: orderId,
+                  orderData: {
+                    items: orderDetails.items,
+                    notes: orderDetails.notes,
+                    pickupTime: orderDetails.pickupTime,
+                  },
+                }));
+                broadcastSent = true;
+                console.log(`[Order Detection] ✓ Sent AI organized message via WebSocket for order ${orderId}`);
+              }
             }
 
             if (!broadcastSent) {
@@ -1383,6 +1398,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update order status to Confirmed
       await storage.updateOrderStatus(orderId, 'Confirmed');
 
+      // 5. Create order in Clover (if Clover is connected)
+      try {
+        const tokenRecord = await db.select()
+          .from(oauthTokens)
+          .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+          .limit(1);
+
+        if (tokenRecord[0]) {
+          // Decrypt the access token
+          let accessToken = process.env.MERCHENT_API_KEY || "";
+          // try {
+          //   accessToken = decrypt(tokenRecord[0].accessToken);
+          // } catch (error) {
+          //   // Fallback to env var if decryption fails
+          //   accessToken = process.env.MERCHENT_API_KEY || "";
+          // }
+
+
+          const merchantId = tokenRecord[0].merchantId || 'H4RW04034BGH1';
+
+          // Get menu items to match with Clover items
+          const menuItems = await storage.getMenuItems(userId);
+
+          // Parse order items and create line items for Clover
+          const lineItems: Array<{
+            item?: { id?: string; name?: string };
+            name?: string;
+            price?: number;
+            unitQty?: number;
+          }> = [];
+
+          const orderItems = orderDetails?.items || order.items || [];
+
+          // Skip Clover order creation if no items
+          if (orderItems.length === 0) {
+            console.log(`[Clover] Skipping Clover order creation - no items in order`);
+          } else {
+
+            for (const itemStr of orderItems) {
+              // Parse item string (e.g., "2x Classic Elote Cup: $8.99" or "Classic Elote Cup: $8.99")
+              const quantityMatch = itemStr.match(/^(\d+)x\s*(.+)$/i);
+              const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
+              const itemNameWithPrice = quantityMatch ? quantityMatch[2] : itemStr;
+
+              // Extract price if present
+              // Note: When quantity > 1, the price shown is the TOTAL price (e.g., "2x Item: $17.98" means $17.98 total)
+              const priceMatch = itemNameWithPrice.match(/:\s*\$([\d.]+)/);
+              const totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+
+              // Remove price from item name
+              const itemName = itemNameWithPrice.replace(/:\s*\$[\d.]+.*$/, '').trim();
+
+              // Calculate unit price
+              let unitPrice: number;
+              if (totalPrice !== null) {
+                unitPrice = totalPrice / quantity; // Divide total by quantity to get unit price
+              } else {
+                // If no price found, try to get from menu items or default
+                const matchingMenuItem = menuItems.find(mi =>
+                  mi.name.toLowerCase() === itemName.toLowerCase() ||
+                  itemName.toLowerCase().includes(mi.name.toLowerCase())
+                );
+
+                if (matchingMenuItem) {
+                  unitPrice = parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, ''));
+                } else {
+                  // Default price if none found ($9.99)
+                  unitPrice = 9.99;
+                }
+              }
+
+              // Create separate line items for each quantity
+              // Note: unitQty is only for items priced PER_UNIT (with scaling factor 1000)
+              // For regular items with quantities, we create separate line items
+              for (let i = 0; i < quantity; i++) {
+                const lineItem: any = {
+                  name: itemName,
+                  price: Math.round(unitPrice * 100), // Price in cents (unit price, not total)
+                };
+
+                // Ensure price is valid (positive integer)
+                if (lineItem.price > 0) {
+                  lineItems.push(lineItem);
+                } else {
+                  console.warn(`[Clover] Skipping line item with invalid price: ${itemName} (price: ${lineItem.price})`);
+                }
+              }
+            }
+
+            // Create atomic order payload according to Clover API
+            // Clover atomic order expects a "cart" object with lineItems
+            const atomicOrderPayload: any = {
+              orderCart: {
+                lineItems: lineItems,
+              },
+            };
+
+            // Add title if customer name is available
+            if (order.firstName || order.lastName) {
+              atomicOrderPayload.title = `Order from ${order.firstName || ''} ${order.lastName || ''}`.trim();
+            }
+
+            // Add notes if available
+            if (orderDetails?.notes || order.notes) {
+              atomicOrderPayload.note = orderDetails?.notes || order.notes || undefined;
+            }
+
+            // Ensure we have line items before creating order
+            if (lineItems.length === 0) {
+              console.log(`[Clover] Skipping Clover order creation - no valid line items parsed`);
+            } else {
+              console.log(`[Clover] Creating atomic order for merchant ${merchantId} with ${lineItems.length} items`);
+              console.log(`[Clover] Atomic order payload:`, JSON.stringify(atomicOrderPayload, null, 2));
+
+              // Create the atomic order in Clover
+              const cloverResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/atomic_order/orders`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(atomicOrderPayload),
+              });
+
+              if (cloverResponse.ok) {
+                const cloverOrder = await cloverResponse.json();
+                console.log(`[Clover] ✓ Successfully created order ${cloverOrder.id} in Clover`);
+              } else {
+                const errorText = await cloverResponse.text();
+                console.error(`[Clover] Failed to create order in Clover (${cloverResponse.status}):`, errorText);
+                // Don't fail the request if Clover creation fails
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[Clover] Error creating order in Clover:', error);
+        // Don't fail the request if Clover creation fails - order is still saved locally
+      }
+
+      // 6. Send confirmation message to customer
+      try {
+        const confirmationMessageId = randomUUID();
+        const confirmationMessage: Message = {
+          id: confirmationMessageId,
+          text: 'Your order has been confirmed',
+          isOutgoing: false, // false = from business (appears on right side)
+          timestamp: new Date().toISOString(),
+        };
+
+        // Save confirmation message to database
+        await storage.addMessageToOrder(userId, orderId, confirmationMessage);
+        await storage.updateOrderLastMessage(orderId, new Date());
+
+        // Broadcast confirmation message to all connected WebSocket clients for this user
+        const userWs = userWebSockets.get(userId);
+        if (userWs && userWs.size > 0) {
+          let sentCount = 0;
+          userWs.forEach((clientWs) => {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'message_received',
+                messageId: confirmationMessageId,
+                text: confirmationMessage.text,
+                timestamp: confirmationMessage.timestamp,
+                isOutgoing: false,
+                orderId: orderId,
+              }));
+              sentCount++;
+            }
+          });
+          console.log(`[Send to Preparation] ✓ Broadcasted confirmation message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
+        }
+      } catch (error) {
+        console.error('[Send to Preparation] Error sending confirmation message:', error);
+        // Don't fail the request if message sending fails
+      }
+
       res.json({
         success: true,
         message: 'Order sent to preparation successfully',
@@ -1425,6 +1618,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else {
         console.log(`[Mark Ready] No customer found for order ${orderId} with phone ${order.number}`);
+      }
+
+      // Send ready for pickup message to customer
+      try {
+        const readyMessageId = randomUUID();
+        const readyMessage: Message = {
+          id: readyMessageId,
+          text: 'Your order is ready for pickup',
+          isOutgoing: false, // false = from business (appears on right side)
+          timestamp: new Date().toISOString(),
+        };
+
+        // Save ready message to database
+        await storage.addMessageToOrder(userId, orderId, readyMessage);
+        await storage.updateOrderLastMessage(orderId, new Date());
+
+        // Broadcast ready message to all connected WebSocket clients for this user
+        const userWs = userWebSockets.get(userId);
+        if (userWs && userWs.size > 0) {
+          let sentCount = 0;
+          userWs.forEach((clientWs) => {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'message_received',
+                messageId: readyMessageId,
+                text: readyMessage.text,
+                timestamp: readyMessage.timestamp,
+                isOutgoing: false,
+                orderId: orderId,
+              }));
+              sentCount++;
+            }
+          });
+          console.log(`[Mark Ready] ✓ Broadcasted ready message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
+        }
+      } catch (error) {
+        console.error('[Mark Ready] Error sending ready message:', error);
+        // Don't fail the request if message sending fails
       }
 
       res.json({ success: true, message: 'Order marked as ready' });

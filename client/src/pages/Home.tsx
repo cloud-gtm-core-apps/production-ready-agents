@@ -49,10 +49,11 @@ export default function Home() {
         // Hide typing animation
         setIsTyping(false);
         
-        // If this is an AI organized message, refetch to show it
+        // If this is an AI organized message, refetch to update orderDetails (message is not shown in chat, form auto-fills)
         if (data.isAIOrganized) {
-          console.log(`[Frontend] AI organized message received for order ${data.orderId}, refetching conversations...`);
+          console.log(`[Frontend] AI organized message received for order ${data.orderId}, refetching conversations to update orderDetails...`);
           // Refetch all order-related queries (matching query keys that start with '/api/orders')
+          // This updates the conversation with orderDetails, but the message itself is filtered out in ConversationView
           setTimeout(async () => {
             await queryClient.refetchQueries({ 
               queryKey: ['/api/orders'],
