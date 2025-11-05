@@ -632,7 +632,7 @@ export default function ConversationView({
       )}
 
       {conversation.orderDetails && (
-        <div className="px-4 pb-3">
+        <div className="px-4 pb-3 max-h-[60vh] overflow-y-auto">
           <EditableOrderSummary
             orderDetails={conversation.orderDetails}
             orderStatus={conversation.orderStatus}
