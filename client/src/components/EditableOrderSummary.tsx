@@ -87,15 +87,17 @@ export default function EditableOrderSummary({
   );
   const [newItemName, setNewItemName] = useState('');
 
-  // Update editedPickupTime when detectedPickupTime is received
+  // Keep pickup time in sync when not actively editing
   useEffect(() => {
-    if (detectedPickupTime) {
-      const formatted = formatPickupTime(detectedPickupTime);
-      if (formatted) {
-        setEditedPickupTime(formatted);
-      }
+    if (isEditing) {
+      return;
     }
-  }, [detectedPickupTime]);
+
+    const formatted =
+      formatPickupTime(pickupTimeFromAI || detectedPickupTime || orderDetails.pickupTime) || '';
+
+    setEditedPickupTime(formatted);
+  }, [pickupTimeFromAI, detectedPickupTime, orderDetails.pickupTime, isEditing]);
 
   // Handle auto-start editing when Confirm Order button is clicked
   useEffect(() => {
@@ -103,11 +105,8 @@ export default function EditableOrderSummary({
       // Use AI data if available, otherwise use orderDetails
       const itemsToUse = itemsFromAI && itemsFromAI.length > 0 ? itemsFromAI : orderDetails.items;
       const notesToUse = notesFromAI !== undefined ? notesFromAI : (orderDetails.notes || '');
-      const pickupTimeToUse = pickupTimeFromAI || detectedPickupTime || formatPickupTime(orderDetails.pickupTime);
-      
-      setEditedItems(parseItems(itemsToUse));
-      setEditedNotes(notesToUse);
-      setEditedPickupTime(pickupTimeToUse || (() => {
+      const pickupSource = pickupTimeFromAI || detectedPickupTime || orderDetails.pickupTime;
+      const pickupTimeToUse = formatPickupTime(pickupSource) || (() => {
         const future = new Date(Date.now() + 15 * 60 * 1000);
         let hours = future.getHours();
         let minutes = Math.round(future.getMinutes() / 5) * 5;
@@ -118,7 +117,11 @@ export default function EditableOrderSummary({
         const ampm = hours >= 12 ? 'PM' : 'AM';
         const hours12 = hours % 12 || 12;
         return `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-      })());
+      })();
+      
+      setEditedItems(parseItems(itemsToUse));
+      setEditedNotes(notesToUse);
+      setEditedPickupTime(pickupTimeToUse);
       setIsEditing(true);
     }
   }, [autoStartEditing]); // Only depend on autoStartEditing, not on orderDetails or other props
@@ -153,7 +156,8 @@ export default function EditableOrderSummary({
     setEditedItems(parseItems(orderDetails.items));
     setEditedNotes(orderDetails.notes || '');
     // Use detected pickup time if available, otherwise use saved pickup time, otherwise default to 15 minutes from now
-    const defaultTime = detectedPickupTime || formatPickupTime(orderDetails.pickupTime) || (() => {
+    const defaultSource = pickupTimeFromAI || detectedPickupTime || orderDetails.pickupTime;
+    const defaultTime = formatPickupTime(defaultSource) || (() => {
       const future = new Date(Date.now() + 15 * 60 * 1000);
       let hours = future.getHours();
       let minutes = Math.round(future.getMinutes() / 5) * 5;

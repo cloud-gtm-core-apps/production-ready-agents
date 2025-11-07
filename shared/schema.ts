@@ -137,6 +137,18 @@ export const oauthTokens = pgTable("oauth_tokens", {
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
 
+export const modelComparisons = pgTable("model_comparisons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  conversationHash: varchar("conversation_hash", { length: 64 }).notNull(),
+  customerName: text("customer_name"),
+  menuItemsProvided: jsonb("menu_items_provided"),
+  inputMessageCount: integer("input_message_count").notNull(),
+  openaiMetrics: jsonb("openai_metrics"),
+  trucubeMetrics: jsonb("trucube_metrics"),
+  evaluation: jsonb("evaluation"),
+});
+
 export const insertOrderSchema = createInsertSchema(orders);
 export const insertOrderConversationSchema = createInsertSchema(orderConversations);
 export const insertMenuItemSchema = createInsertSchema(menuItems);
@@ -145,6 +157,7 @@ export const insertOrderHistorySchema = createInsertSchema(orderHistory);
 export const insertCustomerStatsSchema = createInsertSchema(customerStats);
 export const insertMenuItemPopularityAggregateSchema = createInsertSchema(menuItemPopularityAggregates);
 export const insertOAuthTokenSchema = createInsertSchema(oauthTokens);
+export const insertModelComparisonSchema = createInsertSchema(modelComparisons);
 
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
@@ -162,6 +175,8 @@ export type MenuItemPopularityAggregate = typeof menuItemPopularityAggregates.$i
 export type InsertMenuItemPopularityAggregate = z.infer<typeof insertMenuItemPopularityAggregateSchema>;
 export type OAuthToken = typeof oauthTokens.$inferSelect;
 export type InsertOAuthToken = z.infer<typeof insertOAuthTokenSchema>;
+export type ModelComparison = typeof modelComparisons.$inferSelect;
+export type InsertModelComparison = z.infer<typeof insertModelComparisonSchema>;
 
 // Message conversation types for in-memory storage
 export const messageSchema = z.object({

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useUser } from '@/hooks/use-user';
 import { queryClient } from '@/lib/queryClient';
@@ -8,7 +8,7 @@ import MessageList from '@/components/MessageList';
 import MessageListSkeleton from '@/components/MessageListSkeleton';
 import TabBar from '@/components/TabBar';
 import SideDrawer from '@/components/SideDrawer';
-import type { Conversation } from '@shared/schema';
+import type { Conversation, OrderDetails } from '@shared/schema';
 
 type Tab = 'new' | 'confirmed' | 'ready';
 
@@ -18,99 +18,11 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('new');
   const [viewingConversationId, setViewingConversationId] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [ws, setWs] = useState<WebSocket | null>(null);
   const [isTyping, setIsTyping] = useState(false);
-  const [detectedPickupTimes, setDetectedPickupTimes] = useState<Record<string, string>>({});
-  const activeConversationRef = useRef<{ orderId: string; phoneNumber: string } | null>(null);
 
   // Check if user is authenticated, redirect to login if not
   const { user, isAuthenticated, isLoading: isAuthLoading } = useUser({ redirectTo: '/login' });
 
-  // Establish WebSocket connection on mount for real-time updates
-  useEffect(() => {
-    if (!isAuthenticated || !user) return;
-
-    // Create persistent WebSocket connection for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/test-simulator`;
-    const newWs = new WebSocket(wsUrl);
-
-    newWs.onopen = () => {
-      console.log('[Home] WebSocket connected for real-time updates');
-    };
-
-    newWs.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      
-      // Don't refetch on message_sent - optimistic message already shows it
-      // Don't refetch on message_stream_complete - streaming message already shows it perfectly
-      // The streaming message will naturally be replaced by DB message on next navigation or refresh
-      if (data.type === 'message_received') {
-        // Hide typing animation
-        setIsTyping(false);
-        
-        // If this is an AI organized message, refetch to update orderDetails (message is not shown in chat, form auto-fills)
-        if (data.isAIOrganized) {
-          console.log(`[Frontend] AI organized message received for order ${data.orderId}, refetching conversations to update orderDetails...`);
-          // Refetch all order-related queries (matching query keys that start with '/api/orders')
-          // This updates the conversation with orderDetails, but the message itself is filtered out in ConversationView
-          setTimeout(async () => {
-            await queryClient.refetchQueries({ 
-              queryKey: ['/api/orders'],
-              exact: false 
-            });
-            console.log(`[Frontend] Refetched conversations after AI organized message`);
-          }, 300); // Slightly longer delay to ensure DB is updated
-        } else {
-          // Regular message - only refetch counts to update badge numbers
-          queryClient.refetchQueries({ queryKey: ['/api/orders/counts'] });
-        }
-        
-        // Switch to "New" tab if not already there
-        setActiveTab('new');
-      } else if (data.type === 'pickup_time_detected') {
-        // Store detected pickup time (don't save to DB, just show in form)
-        console.log(`[Frontend] Pickup time detected for order ${data.orderId}: ${data.pickupTime}`);
-        setDetectedPickupTimes(prev => {
-          const updated = {
-            ...prev,
-            [data.orderId]: data.pickupTime,
-          };
-          console.log(`[Frontend] Updated detectedPickupTimes:`, updated);
-          return updated;
-        });
-        // Don't refetch - just update the state, the conversation view will use detectedPickupTime prop
-      } else if (data.type === 'error') {
-        console.error('WebSocket error:', data.message);
-        setIsTyping(false);
-      }
-    };
-
-    newWs.onerror = (error) => {
-      console.error('[Home] WebSocket error:', error);
-      setIsTyping(false);
-    };
-
-    newWs.onclose = () => {
-      console.log('[Home] WebSocket disconnected, attempting to reconnect...');
-      setIsTyping(false);
-      // Reconnect after a delay
-      setTimeout(() => {
-        if (isAuthenticated && user) {
-          // Reconnect by re-running the effect
-        }
-      }, 3000);
-    };
-
-    setWs(newWs);
-
-    // Cleanup WebSocket on unmount
-    return () => {
-      if (newWs) {
-        newWs.close();
-      }
-    };
-  }, [isAuthenticated, user]);
 
   // Fetch conversations from API based on active tab (with short cache to prevent flickering)
   const { data: conversations = [], isLoading, error: conversationsError, refetch: refetchConversations } = useQuery<Conversation[]>({
@@ -120,6 +32,7 @@ export default function Home() {
     gcTime: 30000, // Keep in cache for 30 seconds
     refetchOnMount: false, // Don't refetch on mount if data is fresh
     refetchOnWindowFocus: false, // Don't refetch on window focus to prevent flickering
+    refetchInterval: viewingConversationId ? 2000 : 5000,
   });
 
   // Log errors for debugging
@@ -158,9 +71,7 @@ export default function Home() {
   };
 
   const handleConfirmOrder = (conversationId: string) => {
-    // TODO: Call API to update order status
-    console.log('Confirm order:', conversationId);
-    setViewingConversationId(null);
+    console.log('Confirm order requested for', conversationId);
   };
 
   const handleMarkReady = async (conversationId: string) => {
@@ -215,33 +126,28 @@ export default function Home() {
     }
   };
 
-  const handleUpdateOrder = async (conversationId: string, orderDetails: any) => {
+  const handleUpdateOrder = async (conversationId: string, orderDetails: OrderDetails) => {
     try {
-      // Call API to send order to preparation
       const response = await fetch(`/api/orders/${conversationId}/send-to-preparation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderDetails }),
       });
 
-      if (response.ok) {
-        // Immediately remove from cache and refetch to get fresh data
-        queryClient.removeQueries({ queryKey: ['/api/orders', activeTab] });
-        queryClient.removeQueries({ queryKey: ['/api/orders/counts'] });
-        
-        // Force immediate refetch
-        await Promise.all([
-          refetchConversations(),
-          refetchCounts(),
-        ]);
-      } else {
-        const error = await response.json();
-        console.error('Failed to send order to preparation:', error.message || 'Unknown error');
-        alert(error.message || 'Failed to send order to preparation. Please try again.');
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const message = error?.message || 'Failed to update order. Please try again.';
+        alert(message);
+        throw new Error(message);
       }
+
+      await Promise.all([
+        refetchConversations(),
+        refetchCounts(),
+      ]);
     } catch (error) {
-      console.error('Error sending order to preparation:', error);
-      alert('Failed to send order to preparation. Please try again.');
+      console.error('Error updating order:', error);
+      throw error;
     }
   };
 
@@ -255,47 +161,68 @@ export default function Home() {
         method: 'DELETE',
       });
 
-      if (response.ok) {
-        // Navigate back to conversation list
-        setViewingConversationId(null);
-
-        // Immediately remove from cache and refetch to get fresh data
-        queryClient.removeQueries({ queryKey: ['/api/orders'] });
-        queryClient.removeQueries({ queryKey: ['/api/orders/counts'] });
-        
-        // Force immediate refetch
-        await Promise.all([
-          refetchConversations(),
-          refetchCounts(),
-        ]);
-      } else {
-        console.error('Failed to delete order');
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const message = error?.message || 'Failed to delete order. Please try again.';
+        alert(message);
+        throw new Error(message);
       }
+
+      setViewingConversationId(null);
+
+      await Promise.all([
+        refetchConversations(),
+        refetchCounts(),
+      ]);
     } catch (error) {
       console.error('Error deleting order:', error);
+      throw error;
     }
   };
 
   const handleSendMessage = async (conversationId: string, messageText: string) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.error('WebSocket not connected, cannot send message');
-      alert('Connection lost. Please refresh the page.');
-      return;
-    }
-
     try {
-      // Send message via WebSocket for real-time streaming
-      ws.send(JSON.stringify({
-        type: 'send_message',
-        orderId: conversationId,
-        text: messageText,
-      }));
-      
-      // Message will appear instantly via WebSocket message_sent event
-      // AI response will stream in via message_stream_chunk events
+      const response = await fetch(`/api/orders/${conversationId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: messageText }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const message = error?.message || 'Failed to send message. Please try again.';
+        alert(message);
+        throw new Error(message);
+      }
+
+      const data = await response.json().catch(() => ({}));
+
+      queryClient.setQueryData<Conversation[] | undefined>(['/api/orders', activeTab], (previous) => {
+        if (!previous || !Array.isArray(data?.messages)) {
+          return previous;
+        }
+
+        return previous.map((conversation) => {
+          if (conversation.id !== conversationId) {
+            return conversation;
+          }
+
+          return {
+            ...conversation,
+            messages: data.messages,
+            orderDetails: data.orderDetails ?? conversation.orderDetails,
+          };
+        });
+      });
+
+      // Refresh data to reflect new messages and counts
+      await Promise.all([
+        refetchConversations(),
+        refetchCounts(),
+      ]);
     } catch (error) {
-      console.error('Error sending message via WebSocket:', error);
-      alert('Failed to send message. Please try again.');
+      console.error('Error sending message:', error);
+      throw error;
     }
   };
 
@@ -303,87 +230,45 @@ export default function Home() {
   const handleStartTestConversation = async () => {
     if (!user) return;
 
-    // Close existing WebSocket if any
-    if (ws) {
-      ws.close();
-    }
+    try {
+      setIsTyping(true);
 
-    // Create WebSocket connection
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/test-simulator`;
-    const newWs = new WebSocket(wsUrl);
+      const startResponse = await fetch('/api/test-conversation/start', {
+        method: 'POST',
+      });
 
-    newWs.onopen = () => {
-      console.log('WebSocket connected for test conversation');
-      // Start a new conversation
-      newWs.send(JSON.stringify({
-        type: 'start',
-      }));
-    };
-
-    newWs.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      
-      if (data.type === 'conversation_started') {
-        // Store conversation details
-        activeConversationRef.current = {
-          orderId: data.orderId,
-          phoneNumber: data.phoneNumber,
-        };
-        
-        // Show typing animation
-        setIsTyping(true);
-        
-        // Wait a moment, then send initial greeting to trigger AI response
-        setTimeout(() => {
-          newWs.send(JSON.stringify({
-            type: 'send_message',
-            orderId: data.orderId,
-            phoneNumber: data.phoneNumber,
-            text: INITIAL_GREETING,
-          }));
-        }, 500);
-        
-      } else if (data.type === 'message_received') {
-        // Hide typing animation
-        setIsTyping(false);
-        
-        // Only refetch counts to update badge numbers, not the full conversation list
-        // The message is already displayed via streaming, so we don't need to refresh everything
-        queryClient.refetchQueries({ queryKey: ['/api/orders/counts'] });
-        
-        // Switch to "New" tab if not already there
-        setActiveTab('new');
-      } else if (data.type === 'pickup_time_detected') {
-        // Store detected pickup time (don't save to DB, just show in form)
-        console.log(`[Frontend] Pickup time detected for order ${data.orderId}: ${data.pickupTime}`);
-        setDetectedPickupTimes(prev => {
-          const updated = {
-            ...prev,
-            [data.orderId]: data.pickupTime,
-          };
-          console.log(`[Frontend] Updated detectedPickupTimes:`, updated);
-          return updated;
-        });
-        // Trigger refetch to update the UI if conversation is open
-        queryClient.refetchQueries({ queryKey: ['/api/orders'] });
-      } else if (data.type === 'error') {
-        console.error('WebSocket error:', data.message);
-        setIsTyping(false);
+      if (!startResponse.ok) {
+        const error = await startResponse.json().catch(() => ({}));
+        throw new Error(error?.message || 'Failed to start test conversation.');
       }
-    };
 
-    newWs.onerror = (error) => {
-      console.error('WebSocket error:', error);
+      const startData = await startResponse.json();
+      const { orderId } = startData;
+
+      // Refresh order list to include the new conversation
+      await Promise.all([
+        refetchConversations(),
+        refetchCounts(),
+      ]);
+
+      // Automatically focus the new conversation
+      if (orderId) {
+        setViewingConversationId(orderId);
+        setActiveTab('new');
+      }
+      // Refresh again shortly after to capture AI response
+      setTimeout(() => {
+        void Promise.all([
+          refetchConversations(),
+          refetchCounts(),
+        ]);
+      }, 500);
+    } catch (error) {
+      console.error('Error starting test conversation:', error);
+      alert(error instanceof Error ? error.message : 'Failed to start test conversation.');
+    } finally {
       setIsTyping(false);
-    };
-
-    newWs.onclose = () => {
-      console.log('WebSocket disconnected');
-      setIsTyping(false);
-    };
-
-    setWs(newWs);
+    }
   };
 
   const handleSelectConversation = (conversationId: string) => {
@@ -433,8 +318,6 @@ export default function Home() {
           {viewingConversation ? (
             <ConversationView
               conversation={viewingConversation}
-              detectedPickupTime={detectedPickupTimes[viewingConversation.id]}
-              ws={ws}
               onBack={handleBackFromConversation}
               onConfirmOrder={handleConfirmOrder}
               onMarkReady={handleMarkReady}

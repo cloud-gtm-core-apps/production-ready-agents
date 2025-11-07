@@ -3,452 +3,48 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import passport from "./auth";
 import { storage } from "./storage";
-import { insertUserSchema, type Conversation, type Message, type MenuItem, orderConversations } from "@shared/schema";
-import { z } from "zod";
-import OpenAI from "openai";
-import { WebSocketServer, WebSocket } from "ws";
-import { sessionMiddleware } from "./index";
-import { randomUUID, createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
+import { insertUserSchema, type Message, type MenuItem } from "@shared/schema";
+import { randomUUID } from "crypto";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
 import { users, oauthTokens, menuItemPopularityAggregates } from "@shared/schema";
+import { isAuthenticated } from "./utils";
+import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder } from "./utils";
+import { openai } from "./clients";
+import { aiConversationContexts, orderDetectionTimers, menuItemsCache } from "./globals";
+import { analyzeOrderFromConversation, generateAISuggestedResponse } from "./aiFunctions";
 
-// Middleware to check if user is authenticated
-export const isAuthenticated = (req: any, res: any, next: any) => {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-  res.status(401).json({ message: "Unauthorized" });
-};
 
-// Encryption utilities for OAuth tokens
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || process.env.SESSION_SECRET || 'default-key-change-in-production';
-const ALGORITHM = 'aes-256-gcm';
+const INITIAL_TEST_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
 
-function getKey(): Buffer {
-  // Derive a 32-byte key from the encryption key
-  return scryptSync(ENCRYPTION_KEY, 'salt', 32);
-}
-
-function encrypt(text: string): string {
-  const key = getKey();
-  const iv = randomBytes(16);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-
-  const authTag = cipher.getAuthTag();
-
-  // Return iv:authTag:encrypted
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
-}
-
-function decrypt(encryptedText: string): string {
-  const key = getKey();
-  const parts = encryptedText.split(':');
-  if (parts.length !== 3) {
-    throw new Error('Invalid encrypted text format');
+function calculateTotalFromItems(items?: string[]): string | undefined {
+  if (!items || items.length === 0) {
+    return undefined;
   }
 
-  const iv = Buffer.from(parts[0], 'hex');
-  const authTag = Buffer.from(parts[1], 'hex');
-  const encrypted = parts[2];
+  let total = 0;
+  let foundPrice = false;
 
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-
-  return decrypted;
-}
-
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// Store conversation contexts for AI conversations
-const aiConversationContexts = new Map<string, Array<{ role: 'system' | 'user' | 'assistant', content: string }>>();
-
-// Debounce timers for automatic order detection (2 seconds after last message)
-const orderDetectionTimers = new Map<string, NodeJS.Timeout>();
-
-// Store active WebSocket connections per userId for broadcasting updates
-const userWebSockets = new Map<string, Set<WebSocket>>();
-
-// Cache for menu items with expiration (1 day)
-interface MenuItemCache {
-  items: Array<{ name: string; price: string; category: string | null }>;
-  expiresAt: number;
-}
-const menuItemsCache = new Map<string, MenuItemCache>();
-
-// Helper function to get menu items with caching (1 day cache)
-async function getMenuItemsWithCache(userId: string): Promise<Array<{ name: string; price: string; category: string | null }>> {
-  const cached = menuItemsCache.get(userId);
-  const now = Date.now();
-
-  // Check if cache exists and is still valid (1 day = 24 * 60 * 60 * 1000 ms)
-  if (cached && cached.expiresAt > now) {
-    console.log(`[Menu Cache] Using cached menu items for userId ${userId}`);
-    return cached.items;
-  }
-
-  // Fetch fresh menu items from database
-  console.log(`[Menu Cache] Fetching fresh menu items for userId ${userId}`);
-  const menuItems = await storage.getMenuItems(userId);
-
-  // Format for cache (only include needed fields)
-  const formattedItems = menuItems.map(item => ({
-    name: item.name,
-    price: item.price,
-    category: item.category
-  }));
-
-  // Cache for 1 day
-  const expiresAt = now + (24 * 60 * 60 * 1000);
-  menuItemsCache.set(userId, {
-    items: formattedItems,
-    expiresAt
-  });
-
-  return formattedItems;
-}
-
-// Helper function to convert relative time strings to absolute times
-function convertRelativeTimeToAbsolute(timeStr: string, baseTime: Date = new Date()): string | null {
-  const normalized = timeStr.toLowerCase().trim();
-
-  // Check if it's already an absolute time format (contains AM/PM or : pattern)
-  if (normalized.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)/i)) {
-    // Already absolute time, return as-is (but ensure proper formatting)
-    const match = normalized.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)/i);
-    if (match) {
-      let hours = parseInt(match[1]);
-      const minutes = match[2] ? parseInt(match[2]) : 0;
-      const period = match[3].toUpperCase();
-
-      const hours12 = hours % 12 || 12;
-      const minutesStr = minutes.toString().padStart(2, '0');
-      return `${hours12}:${minutesStr} ${period}`;
-    }
-    return timeStr;
-  }
-
-  // Match patterns like "1 hour", "2 hours", "30 minutes", "15 min", "half an hour", etc.
-  const hourMatch = normalized.match(/(\d+)\s*hour/i) || normalized.match(/half\s*an?\s*hour/i);
-  const minuteMatch = normalized.match(/(\d+)\s*min(?:ute)?s?/i);
-
-  const resultTime = new Date(baseTime);
-
-  if (hourMatch) {
-    const hours = normalized.includes('half') ? 0.5 : parseInt(hourMatch[1] || '0');
-    resultTime.setTime(resultTime.getTime() + (hours * 60 * 60 * 1000));
-  } else if (minuteMatch) {
-    const minutes = parseInt(minuteMatch[1] || '0');
-    resultTime.setTime(resultTime.getTime() + (minutes * 60 * 1000));
-  } else {
-    // Not a relative time we can parse
-    return null;
-  }
-
-  // Format as "HH:MM AM/PM"
-  const hours = resultTime.getHours();
-  const minutes = resultTime.getMinutes();
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  const hours12 = hours % 12 || 12;
-  const minutesStr = minutes.toString().padStart(2, '0');
-
-  return `${hours12}:${minutesStr} ${ampm}`;
-}
-
-// Function to analyze conversation and detect if an order has been made
-async function analyzeOrderFromConversation(
-  messages: Message[],
-  customerName?: string,
-  menuItems?: Array<{ name: string; price: string; category: string | null }>
-): Promise<{ orderMade: boolean; orderDetails?: { customerName: string; items: string[]; pickupTime?: string; notes?: string } }> {
-  // Format conversation for AI analysis
-  const conversationText = messages.map(msg => {
-    const sender = msg.isOutgoing ? 'Customer' : 'Restaurant';
-    return `${sender}: ${msg.text}`;
-  }).join('\n');
-
-  // Get current time to convert relative times
-  const currentTime = new Date();
-  const currentTimeString = currentTime.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-
-  // Build menu context if menu items are provided
-  let menuContext = '';
-  if (menuItems && menuItems.length > 0) {
-    // Group by category for better organization
-    const byCategory = menuItems.reduce((acc, item) => {
-      const category = item.category || 'Other';
-      if (!acc[category]) acc[category] = [];
-      acc[category].push(item);
-      return acc;
-    }, {} as Record<string, Array<{ name: string; price: string }>>);
-
-    menuContext = '\n\nMENU ITEMS (use this to accurately identify and correlate items mentioned in the conversation):\n';
-    Object.entries(byCategory).forEach(([category, items]) => {
-      menuContext += `\n${category}:\n`;
-      items.forEach(item => {
-        menuContext += `  - ${item.name}: ${item.price}\n`;
-      });
-    });
-    menuContext += '\nWhen extracting items from the conversation, match them to the menu items above. Use the exact menu item names when possible. Include the price from the menu for each item. If a customer mentions variations or customizations, include them in the item name (e.g., "Corn on the Cob (with butter): $3.50" or "2x Corn on the Cob: $7.00"). For items with quantities, calculate the total price (e.g., "2x Corn on the Cob: $7.00" if the price is $3.50 each).';
-  }
-
-  const systemPrompt = `You are an order detection system for a restaurant. Analyze the conversation and determine if the customer has placed an order.
-
-IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
-
-If an order has been placed, extract:
-1. Customer name (if mentioned)
-2. All items ordered (be specific, include quantities, prices, and customizations):
-   - Match items mentioned in the conversation to the menu items provided above
-   - Use exact menu item names when possible
-   - Include the price from the menu for each item in the format: "Item Name: $X.XX"
-   - For quantities, include quantity and calculate total price: "2x Item Name: $X.XX" (where $X.XX is the total for that quantity)
-   - Include customizations or modifications in the item name: "Item Name (customization): $X.XX"
-   - If an item is mentioned but not in the menu, still include it as mentioned (without price if unknown)
-3. Pickup time (if mentioned):
-   - If relative time is mentioned (e.g., "in 1 hour", "30 minutes", "15 min", "half an hour"), convert it to absolute time based on current time (${currentTimeString})
-   - If absolute time is mentioned (e.g., "3:30 PM", "5pm"), use it as-is
-   - Format as "HH:MM AM/PM" (e.g., "3:30 PM", "5:00 PM")
-   - Example: If current time is 2:00 PM and customer says "in 1 hour", return "3:00 PM"
-   - Example: If current time is 2:00 PM and customer says "in 30 minutes", return "2:30 PM"
-4. Any special notes or instructions
-
-Return ONLY a valid JSON object with this exact structure:
-{
-  "orderMade": true/false,
-  "orderDetails": {
-    "customerName": "string or null",
-    "items": ["item 1: $X.XX", "item 2: $X.XX", ...],
-    "pickupTime": "string in format 'HH:MM AM/PM' (e.g., '3:30 PM', '5:00 PM') or null",
-    "notes": "string or null"
-  }
-}
-
-If no order has been made, return: {"orderMade": false}`;
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Analyze this conversation:\n\n${conversationText}\n\nCustomer name from order info: ${customerName || 'unknown'}` }
-      ],
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-    });
-
-    const response = JSON.parse(completion.choices[0].message.content || '{"orderMade": false}');
-
-    // Convert relative times to absolute times as a fallback if AI didn't convert it
-    if (response.orderMade && response.orderDetails && response.orderDetails.pickupTime) {
-      const originalTime = response.orderDetails.pickupTime;
-      const convertedTime = convertRelativeTimeToAbsolute(response.orderDetails.pickupTime, currentTime);
-      if (convertedTime) {
-        response.orderDetails.pickupTime = convertedTime;
-        console.log(`[Order Detection] Converted relative time "${originalTime}" to absolute time "${convertedTime}"`);
+  for (const item of items) {
+    const priceMatch = item.match(/:\s*\$([\d.,]+)/);
+    if (priceMatch) {
+      const value = parseFloat(priceMatch[1].replace(/,/g, ''));
+      if (!Number.isNaN(value)) {
+        total += value;
+        foundPrice = true;
       }
     }
-
-    return response;
-  } catch (error) {
-    console.error('Error analyzing order:', error);
-    return { orderMade: false };
-  }
-}
-
-// Function to format order details into AI organized message format
-function formatOrderMessage(orderDetails: { customerName: string; items: string[]; pickupTime?: string; notes?: string }, menuItems?: Array<{ name: string; price: string; category: string | null }>): string {
-  let message = `Customer: ${orderDetails.customerName}\n`;
-
-  // Add each item on its own line with spacing
-  // If items already have prices (from AI), use them as-is
-  // Otherwise, try to match with menu items and add prices
-  orderDetails.items.forEach((item) => {
-    // Check if item already has a price in the format "Item: $X.XX"
-    if (item.includes(':$') || item.includes(': $')) {
-      // Item already has price, use as-is
-      message += `\n${item}`;
-    } else if (menuItems && menuItems.length > 0) {
-      // Try to match item with menu items to add price
-      let matched = false;
-
-      // Look for quantity prefix (e.g., "2x ")
-      const quantityMatch = item.match(/^(\d+)x\s*(.+)$/i);
-      const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
-      const baseItemName = quantityMatch ? quantityMatch[2].trim() : item.trim();
-
-      // Try exact match first
-      for (const menuItem of menuItems) {
-        if (menuItem.name.toLowerCase() === baseItemName.toLowerCase()) {
-          const priceNum = parseFloat(menuItem.price.replace(/[^0-9.]/g, ''));
-          const totalPrice = (priceNum * quantity).toFixed(2);
-          const formattedItem = quantity > 1
-            ? `${quantity}x ${menuItem.name}: $${totalPrice}`
-            : `${menuItem.name}: ${menuItem.price}`;
-          message += `\n${formattedItem}`;
-          matched = true;
-          break;
-        }
-      }
-
-      // If no exact match, try partial match
-      if (!matched) {
-        for (const menuItem of menuItems) {
-          if (baseItemName.toLowerCase().includes(menuItem.name.toLowerCase()) ||
-            menuItem.name.toLowerCase().includes(baseItemName.toLowerCase())) {
-            const priceNum = parseFloat(menuItem.price.replace(/[^0-9.]/g, ''));
-            const totalPrice = (priceNum * quantity).toFixed(2);
-            const formattedItem = quantity > 1
-              ? `${quantity}x ${menuItem.name}: $${totalPrice}`
-              : `${menuItem.name}: ${menuItem.price}`;
-            message += `\n${formattedItem}`;
-            matched = true;
-            break;
-          }
-        }
-      }
-
-      // If still no match, use item as-is without price
-      if (!matched) {
-        message += `\n${item}`;
-      }
-    } else {
-      // No menu items available, use item as-is
-      message += `\n${item}`;
-    }
-  });
-
-  // Add notes as a separate line if they exist
-  if (orderDetails.notes && orderDetails.notes.trim()) {
-    message += `\n\n${orderDetails.notes}`;
   }
 
-  // Add pickup time with spacing (shown in AI organized bubble)
-  if (orderDetails.pickupTime) {
-    message += `\n\nPickup Time: ${orderDetails.pickupTime}`;
+  if (!foundPrice) {
+    return undefined;
   }
 
-  return message;
-}
-
-// Helper function to generate AI suggested response
-async function generateAISuggestedResponse(
-  messages: Message[],
-  userId: string,
-  orderId: string,
-  ws?: WebSocket,
-  shouldBroadcast: boolean = true
-): Promise<string | null> {
-  try {
-    // Only generate suggestions when the last message is from the customer (not the owner)
-    // isOutgoing: true = Customer messages, isOutgoing: false = Restaurant/Owner messages
-    if (messages.length === 0) {
-      return null; // No messages, nothing to suggest
-    }
-
-    // Get the last message (most recent)
-    const lastMessage = messages[messages.length - 1];
-
-    // Skip if last message is from restaurant/owner (isOutgoing: false)
-    // Only generate suggestions for customer messages (isOutgoing: true)
-    if (!lastMessage.isOutgoing) {
-      console.log(`[AI Suggested Response] Skipping - last message is from restaurant/owner, not generating suggestion`);
-      return null;
-    }
-
-    // Also skip AI organized messages (they're system messages, not customer messages)
-    if ((lastMessage as any).isAIOrganized) {
-      console.log(`[AI Suggested Response] Skipping - last message is AI organized message, not generating suggestion`);
-      return null;
-    }
-
-    // Format conversation for AI analysis
-    const conversationText = messages.map(msg => {
-      const sender = msg.isOutgoing ? 'Customer' : 'Restaurant';
-      return `${sender}: ${msg.text}`;
-    }).join('\n');
-
-    const systemPrompt = `You are helping a restaurant manager named Rod write responses to customers. Generate a short, natural, human-sounding response based on the conversation.
-
-Guidelines:
-- Keep it brief (under 40 words, ideally 10-20 words)
-- Sound natural and casual, like a real person texting
-- Be helpful but not overly excited or enthusiastic
-- Use normal, everyday language - no exclamation points unless truly needed
-- Match the tone of the conversation - if customer is casual, be casual
-- Don't be overly formal or corporate-sounding
-- Just provide the response text itself - no prefixes or labels
-
-Think: "How would a real restaurant manager text back to a customer?" - natural, brief, helpful.`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Conversation:\n${conversationText}\n\nGenerate a short response suggestion for Rod to send to the customer.` }
-      ],
-      temperature: 0.7,
-      max_tokens: 100,
-    });
-
-    const suggestedResponse = completion.choices[0].message.content?.trim() || '';
-
-    if (suggestedResponse) {
-      console.log(`[AI Suggested Response] Generated suggestion for order ${orderId}: ${suggestedResponse.substring(0, 50)}...`);
-
-      // Broadcast to WebSocket connections only if shouldBroadcast is true
-      if (shouldBroadcast) {
-        const userWs = userWebSockets.get(userId);
-        if (userWs && userWs.size > 0) {
-          userWs.forEach((clientWs) => {
-            if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({
-                type: 'ai_suggested_response',
-                orderId: orderId,
-                suggestion: suggestedResponse,
-                timestamp: new Date().toISOString(),
-              }));
-            }
-          });
-          console.log(`[AI Suggested Response] ✓ Broadcasted to ${userWs.size} WebSocket connection(s) for order ${orderId}`);
-        } else if (ws && ws.readyState === WebSocket.OPEN) {
-          // Fallback to provided WebSocket
-          ws.send(JSON.stringify({
-            type: 'ai_suggested_response',
-            orderId: orderId,
-            suggestion: suggestedResponse,
-            timestamp: new Date().toISOString(),
-          }));
-          console.log(`[AI Suggested Response] ✓ Sent via provided WebSocket for order ${orderId}`);
-        }
-      }
-
-      return suggestedResponse;
-    }
-
-    return null;
-  } catch (error) {
-    console.error(`[AI Suggested Response] Error generating suggestion for order ${orderId}:`, error);
-    // Don't throw - this is a non-critical feature
-    return null;
-  }
+  return total.toFixed(2);
 }
 
 // Helper function to trigger debounced order detection
-function triggerDebouncedOrderDetection(userId: string, orderId: string, ws?: WebSocket) {
+function triggerDebouncedOrderDetection(userId: string, orderId: string) {
   // Clear existing timer if any
   const existingTimer = orderDetectionTimers.get(orderId);
   if (existingTimer) {
@@ -458,7 +54,7 @@ function triggerDebouncedOrderDetection(userId: string, orderId: string, ws?: We
   // Set new timer for 2 seconds
   const timer = setTimeout(async () => {
     console.log(`[Order Detection] Debounce timer expired for order ${orderId}, triggering analysis...`);
-    await checkForOrderDetection(userId, orderId, ws);
+    await checkForOrderDetection(userId, orderId);
     orderDetectionTimers.delete(orderId);
   }, 2000); // 2 second debounce
 
@@ -469,11 +65,10 @@ function triggerDebouncedOrderDetection(userId: string, orderId: string, ws?: We
 // Helper function to check for order detection asynchronously
 async function checkForOrderDetection(
   userId: string,
-  orderId: string,
-  ws?: WebSocket
+  orderId: string
 ): Promise<void> {
   // Log immediately to confirm function is called
-  console.log(`[Order Detection] Function called for order ${orderId}, userId: ${userId}, hasWS: ${!!ws}`);
+  console.log(`[Order Detection] Function called for order ${orderId}, userId: ${userId}`);
 
   // Return a promise that resolves after the delay and work is complete
   return new Promise((resolve) => {
@@ -720,79 +315,52 @@ async function checkForOrderDetection(
 
             // If pickup time was included in order details, send it to frontend (don't save to DB)
             if (hasPickupTime) {
-              console.log(`[Order Detection] Pickup time included in order details (${pickupTimeValue}), sending to frontend...`);
+              console.log(`[Order Detection] Pickup time included in order details (${pickupTimeValue}), persisting detection flag...`);
 
               // Set the flag so pickup time detection knows it was already found
               await storage.updatePickupTimeDetected(orderId, true);
-
-              // Send detected pickup time to frontend via WebSocket (don't save to database)
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'pickup_time_detected',
-                  orderId: orderId,
-                  pickupTime: pickupTimeValue,
-                  timestamp: new Date().toISOString(),
-                }));
-                console.log(`[Order Detection] ✓ Sent detected pickup time "${pickupTimeValue}" to frontend for order ${orderId}`);
-              }
             } else {
               console.log(`[Order Detection] No pickup time in order details for order ${orderId}, pickupTimeDetected flag not set`);
             }
 
             console.log(`[Order Detection] ✓ Order detected and message saved successfully for order ${orderId}`);
 
-            // ALWAYS broadcast new AI organized message to all active WebSocket connections
-            // Send structured order data for auto-filling the form (message text is still saved but not displayed)
-            const userWs = userWebSockets.get(userId);
-            let broadcastSent = false;
-
             // Ensure orderDetails exists (it should at this point, but TypeScript needs the check)
             const orderDetails = analysis.orderDetails;
             if (orderDetails) {
-              if (userWs && userWs.size > 0) {
-                let sentCount = 0;
-                userWs.forEach((clientWs) => {
-                  if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(JSON.stringify({
-                      type: 'message_received',
-                      text: orderMessageText,
-                      timestamp: orderMessage.timestamp,
-                      isAIOrganized: true,
-                      orderId: orderId,
-                      orderData: {
-                        items: orderDetails.items,
-                        notes: orderDetails.notes,
-                        pickupTime: orderDetails.pickupTime,
-                      },
-                    }));
-                    sentCount++;
-                    broadcastSent = true;
-                  }
-                });
-                console.log(`[Order Detection] ✓ Broadcasted AI organized message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
-              }
+              console.log(`[Order Detection] Prepared structured order details for order ${orderId}:`, {
+                items: orderDetails.items,
+                notes: orderDetails.notes,
+                pickupTime: orderDetails.pickupTime,
+              });
 
-              // Also try provided WebSocket as fallback
-              if (!broadcastSent && ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'message_received',
-                  text: orderMessageText,
-                  timestamp: orderMessage.timestamp,
-                  isAIOrganized: true,
-                  orderId: orderId,
-                  orderData: {
-                    items: orderDetails.items,
-                    notes: orderDetails.notes,
-                    pickupTime: orderDetails.pickupTime,
-                  },
-                }));
-                broadcastSent = true;
-                console.log(`[Order Detection] ✓ Sent AI organized message via WebSocket for order ${orderId}`);
-              }
-            }
+              try {
+                const derivedTotal = calculateTotalFromItems(orderDetails.items);
+                const updatePayload: {
+                  items?: string[];
+                  notes?: string | null;
+                  pickupTime?: string | Date;
+                  total?: string;
+                } = {
+                  items: orderDetails.items,
+                  pickupTime: orderDetails.pickupTime,
+                  total: derivedTotal,
+                };
 
-            if (!broadcastSent) {
-              console.log(`[Order Detection] ⚠️ No active WebSocket connections for userId ${userId}, message saved to DB only`);
+                if (orderDetails.notes !== undefined) {
+                  updatePayload.notes = orderDetails.notes ?? null;
+                }
+
+                await updateOrderFromDetails(
+                  storage,
+                  orderId,
+                  updatePayload,
+                  { skipStatusUpdate: true }
+                );
+                console.log(`[Order Detection] Persisted AI order details to order ${orderId}`);
+              } catch (persistError) {
+                console.error(`[Order Detection] Failed to persist AI order details for order ${orderId}:`, persistError);
+              }
             }
           }
         } else {
@@ -811,213 +379,6 @@ async function checkForOrderDetection(
       }
     }, 500); // Delay to ensure database transaction is committed
   });
-}
-
-// Function to analyze conversation and detect pickup time
-async function analyzePickupTimeFromConversation(
-  messages: Message[]
-): Promise<{ pickupTimeFound: boolean; pickupTime?: string }> {
-  // Format conversation for AI analysis
-  const conversationText = messages.map(msg => {
-    const sender = msg.isOutgoing ? 'Customer' : 'Restaurant';
-    return `${sender}: ${msg.text}`;
-  }).join('\n');
-
-  const systemPrompt = `You are a pickup time detection system for a restaurant. Analyze the conversation and extract any pickup time mentioned.
-
-Look for:
-1. Relative times: "15 minutes", "30 min", "1 hour", "in 20 minutes", "half an hour", etc.
-2. Specific times: "3:30 PM", "5pm", "at 2:00", "by 4:15", etc.
-3. Time expressions: "in 15", "15 mins", "30min", etc.
-
-Convert relative times to specific times based on the current conversation context. For example:
-- "15 minutes" from a message sent at 2:00 PM = 2:15 PM
-- "1 hour" from a message sent at 3:00 PM = 4:00 PM
-
-Return ONLY a valid JSON object with this exact structure:
-{
-  "pickupTimeFound": true/false,
-  "pickupTime": "string in format 'HH:MM AM/PM' (e.g., '2:15 PM', '4:30 PM') or null",
-  "relativeTime": "string if relative time mentioned (e.g., '15 minutes', '1 hour') or null"
-}
-
-If no pickup time is found, return: {"pickupTimeFound": false}`;
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Analyze this conversation for pickup time. Current time context: ${new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' })}\n\nConversation:\n${conversationText}` }
-      ],
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-    });
-
-    const response = JSON.parse(completion.choices[0].message.content || '{"pickupTimeFound": false}');
-
-    if (response.pickupTimeFound && response.pickupTime) {
-      return {
-        pickupTimeFound: true,
-        pickupTime: response.pickupTime
-      };
-    }
-
-    return { pickupTimeFound: false };
-  } catch (error) {
-    console.error('Error analyzing pickup time:', error);
-    return { pickupTimeFound: false };
-  }
-}
-
-// Helper function to parse pickup time string (e.g., "2:30 PM") into a Date object
-function parsePickupTimeString(timeStr: string): Date | null {
-  try {
-    const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-    if (!match) {
-      console.warn(`[Pickup Time] Could not parse pickup time string: ${timeStr}`);
-      return null;
-    }
-
-    let hours = parseInt(match[1]);
-    const minutes = parseInt(match[2]);
-    const period = match[3].toUpperCase();
-
-    // Convert to 24-hour format
-    if (period === 'PM' && hours !== 12) hours += 12;
-    if (period === 'AM' && hours === 12) hours = 0;
-
-    // Create Date object for today with the specified time
-    const date = new Date();
-    date.setHours(hours, minutes, 0, 0);
-
-    return date;
-  } catch (error) {
-    console.error(`[Pickup Time] Error parsing pickup time: ${timeStr}`, error);
-    return null;
-  }
-}
-
-// Helper function to check for pickup time detection asynchronously
-async function checkForPickupTimeDetection(
-  userId: string,
-  orderId: string,
-  ws?: WebSocket
-): Promise<void> {
-  // Log immediately to confirm function is called
-  console.log(`[Pickup Time Detection] Function called for order ${orderId}, userId: ${userId}, hasWS: ${!!ws}`);
-
-  // Return a promise that resolves after the delay and work is complete
-  return new Promise((resolve) => {
-    // Run asynchronously with a delay to ensure message is saved to database
-    setTimeout(async () => {
-      try {
-        console.log(`[Pickup Time Detection] Starting check for order ${orderId}, userId: ${userId}`);
-
-        const order = await storage.getOrderById(userId, orderId);
-
-        if (!order) {
-          console.log(`[Pickup Time Detection] Order ${orderId} not found, skipping`);
-          resolve();
-          return;
-        }
-
-        // Skip if pickup time already detected
-        // Note: We check pickupTimeDetected flag, NOT orderMade flag
-        // This ensures pickup time detection runs even if order detection found an order but no pickup time
-        if (order.pickupTimeDetected === true) {
-          console.log(`[Pickup Time Detection] Order ${orderId} already has pickupTimeDetected=true, skipping`);
-          resolve();
-          return;
-        }
-
-        console.log(`[Pickup Time Detection] Order ${orderId} has pickupTimeDetected=${order.pickupTimeDetected}, orderMade=${order.orderMade}, proceeding with analysis`);
-
-        // Get all messages for the conversation
-        const conversation = await storage.getOrderConversation(userId, orderId);
-        if (!conversation) {
-          console.log(`[Pickup Time Detection] No conversation found for order ${orderId}, skipping`);
-          resolve();
-          return;
-        }
-
-        const messages = (conversation.messages as Message[]) || [];
-        console.log(`[Pickup Time Detection] Found ${messages.length} messages in conversation`);
-
-        if (messages.length === 0) {
-          console.log(`[Pickup Time Detection] No messages in conversation, skipping`);
-          resolve();
-          return;
-        }
-
-        // Analyze conversation for pickup time
-        console.log(`[Pickup Time Detection] Calling analyzePickupTimeFromConversation for order ${orderId}...`);
-        const analysis = await analyzePickupTimeFromConversation(messages);
-
-        console.log(`[Pickup Time Detection] Analysis result for order ${orderId}:`, {
-          pickupTimeFound: analysis.pickupTimeFound,
-          pickupTime: analysis.pickupTime
-        });
-
-        if (analysis.pickupTimeFound && analysis.pickupTime) {
-          // Final check - make sure pickup time wasn't detected by another process
-          const finalOrderCheck = await storage.getOrderById(userId, orderId);
-          if (finalOrderCheck && finalOrderCheck.pickupTimeDetected === true) {
-            console.log(`[Pickup Time Detection] Order ${orderId} pickup time was detected by another process, skipping`);
-            resolve();
-            return;
-          }
-
-          // Update pickupTimeDetected flag
-          console.log(`[Pickup Time Detection] Setting pickupTimeDetected=true for order ${orderId}...`);
-          await storage.updatePickupTimeDetected(orderId, true);
-
-          // Send detected pickup time to frontend via WebSocket (don't save to database)
-          console.log(`[Pickup Time Detection] Sending detected pickup time "${analysis.pickupTime}" to frontend for order ${orderId}...`);
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'pickup_time_detected',
-              orderId: orderId,
-              pickupTime: analysis.pickupTime,
-              timestamp: new Date().toISOString(),
-            }));
-            console.log(`[Pickup Time Detection] ✓ Sent detected pickup time "${analysis.pickupTime}" to frontend for order ${orderId}`);
-          } else {
-            console.log(`[Pickup Time Detection] WebSocket not available for order ${orderId}, pickup time will not be sent to frontend`);
-          }
-
-          console.log(`[Pickup Time Detection] ✓ Pickup time detected for order ${orderId} (will appear in order form when edited, not saved to DB)`);
-        } else {
-          console.log(`[Pickup Time Detection] No pickup time detected in conversation for order ${orderId}`);
-        }
-
-        // Resolve promise when pickup time detection is complete
-        resolve();
-      } catch (error) {
-        console.error(`[Pickup Time Detection] ERROR in pickup time detection for order ${orderId}:`, error);
-        if (error instanceof Error) {
-          console.error(`[Pickup Time Detection] Error stack:`, error.stack);
-        }
-        resolve(); // Resolve even on error
-      }
-    }, 500); // Delay to ensure database transaction is committed
-  });
-}
-
-// Random name generator for test conversations (Dearborn demographic)
-const FIRST_NAMES = ['Fatima', 'Ahmed', 'Nour', 'Layla', 'Hassan', 'Zainab', 'Youssef', 'Rania', 'Omar', 'Maryam', 'Ali', 'Dina', 'Karim', 'Sara', 'Hadi', 'Mariam', 'Bilal', 'Lina', 'Tariq', 'Amira'];
-const LAST_NAMES = ['Hassan', 'Ali', 'Bakri', 'Mansour', 'Khalil', 'Ahmad', 'Hammoud', 'Saleh', 'Ibrahim', 'Farah', 'Rahman', 'Mustafa', 'Nasser', 'Khoury', 'Masri', 'Saad'];
-
-function generateRandomName() {
-  const firstName = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)];
-  const lastName = LAST_NAMES[Math.floor(Math.random() * LAST_NAMES.length)];
-  return { firstName, lastName };
-}
-
-function generateRandomPhoneNumber() {
-  const prefix = '(313) 555-';
-  const suffix = Math.floor(Math.random() * 9000 + 1000);
-  return `${prefix}${suffix}`;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -1277,266 +638,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Order not found' });
       }
 
-      // 1. Find or create customer
-      let customer = await storage.getCustomerByPhoneNumber(userId, order.number);
+      // Create or update customer, stats, and history
+      // const customer = await processCustomerOrder(storage, userId, order, orderDetails);
 
-      if (!customer) {
-        // Create new customer
-        const nameParts = (order.firstName && order.lastName)
-          ? { firstName: order.firstName, lastName: order.lastName }
-          : (order.firstName
-            ? { firstName: order.firstName, lastName: null }
-            : { firstName: null, lastName: null });
-
-        customer = await storage.createCustomer(userId, {
-          userId: userId,
-          phoneNumber: order.number,
-          firstName: nameParts.firstName || null,
-          lastName: nameParts.lastName || null,
-        });
-      }
-
-      // 2. Create or update customer stats
-      let customerStat = await storage.getCustomerStats(customer.id);
-      const totalSpent = parseFloat(orderDetails?.total || order.orderPrice || '0');
-
-      if (!customerStat) {
-        // Create new stats
-        await storage.createCustomerStats(customer.id, {
-          customerId: customer.id,
-          totalOrders: 1,
-          totalSpent: totalSpent.toString(),
-          lastOrderDate: new Date(),
-        });
-      } else {
-        // Update existing stats
-        const newTotalOrders = (customerStat.totalOrders || 0) + 1;
-        const newTotalSpent = parseFloat(customerStat.totalSpent || '0') + totalSpent;
-        await storage.updateCustomerStats(customer.id, {
-          totalOrders: newTotalOrders,
-          totalSpent: newTotalSpent.toFixed(2),
-          lastOrderDate: new Date(),
-        });
-      }
-
-      // 3. Create order history entry
-      const orderHistoryEntry = await storage.createOrderHistory({
-        customerId: customer.id,
-        orderSummary: orderDetails || {
-          items: order.items || [],
-          total: order.orderPrice || '0',
-          pickupTime: order.pickupTime?.toISOString() || null,
-          notes: order.notes || null,
-        },
-        notes: orderDetails?.notes || order.notes || null,
-        status: 'Confirmed',
-      });
-
-      // Trigger refresh of popularity aggregates for this order's date
-      try {
-        const orderDate = new Date(orderHistoryEntry.createdAt);
-        const startDate = new Date(orderDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(orderDate);
-        endDate.setHours(23, 59, 59, 999);
-        await storage.refreshMenuItemPopularityAggregates(userId, startDate, endDate);
-      } catch (error) {
-        console.error('Error refreshing aggregates after order creation:', error);
-        // Don't fail the request if aggregate refresh fails
-      }
-
-      // 4. Update order status, price, pickup time, items, and notes
-      const updateData: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date } = {};
-
-      if (orderDetails?.total) {
-        updateData.orderPrice = orderDetails.total;
-      }
-
-      if (orderDetails?.items && orderDetails.items.length > 0) {
-        updateData.items = orderDetails.items;
-      }
-
-      if (orderDetails?.notes !== undefined) {
-        updateData.notes = orderDetails.notes || null;
-      }
-
-      if (orderDetails?.pickupTime) {
-        // Parse pickup time string to Date
-        // Handle formats like "3:30 PM" or ISO string
-        try {
-          let pickupTimeDate: Date;
-          if (orderDetails.pickupTime.match(/\d{1,2}:\d{2}\s*(AM|PM)/i)) {
-            // Format: "3:30 PM" - need to convert to Date
-            const timeMatch = orderDetails.pickupTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-            if (timeMatch) {
-              let hours = parseInt(timeMatch[1]);
-              const minutes = parseInt(timeMatch[2]);
-              const period = timeMatch[3].toUpperCase();
-
-              if (period === 'PM' && hours !== 12) hours += 12;
-              if (period === 'AM' && hours === 12) hours = 0;
-
-              const now = new Date();
-              pickupTimeDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
-            } else {
-              pickupTimeDate = new Date(orderDetails.pickupTime);
-            }
-          } else {
-            pickupTimeDate = new Date(orderDetails.pickupTime);
-          }
-          updateData.pickupTime = pickupTimeDate;
-        } catch (error) {
-          console.error('Error parsing pickup time:', error);
-        }
-      }
-
-      // Update order details (price, items, notes, pickup time)
-      if (Object.keys(updateData).length > 0) {
-        await storage.updateOrderDetails(orderId, updateData);
-      }
-
-      // Update order status to Confirmed
-      await storage.updateOrderStatus(orderId, 'Confirmed');
+      // Update order status, price, pickup time, items, and notes
+      await updateOrderFromDetails(storage, orderId, orderDetails);
 
       // 5. Create order in Clover (if Clover is connected)
-      try {
-        const tokenRecord = await db.select()
-          .from(oauthTokens)
-          .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
-          .limit(1);
-
-        if (tokenRecord[0]) {
-          // Decrypt the access token
-          let accessToken = process.env.MERCHENT_API_KEY || "";
-          // try {
-          //   accessToken = decrypt(tokenRecord[0].accessToken);
-          // } catch (error) {
-          //   // Fallback to env var if decryption fails
-          //   accessToken = process.env.MERCHENT_API_KEY || "";
-          // }
-
-
-          const merchantId = tokenRecord[0].merchantId || 'H4RW04034BGH1';
-
-          // Get menu items to match with Clover items
-          const menuItems = await storage.getMenuItems(userId);
-
-          // Parse order items and create line items for Clover
-          const lineItems: Array<{
-            item?: { id?: string; name?: string };
-            name?: string;
-            price?: number;
-            unitQty?: number;
-          }> = [];
-
-          const orderItems = orderDetails?.items || order.items || [];
-
-          // Skip Clover order creation if no items
-          if (orderItems.length === 0) {
-            console.log(`[Clover] Skipping Clover order creation - no items in order`);
-          } else {
-
-            for (const itemStr of orderItems) {
-              // Parse item string (e.g., "2x Classic Elote Cup: $8.99" or "Classic Elote Cup: $8.99")
-              const quantityMatch = itemStr.match(/^(\d+)x\s*(.+)$/i);
-              const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
-              const itemNameWithPrice = quantityMatch ? quantityMatch[2] : itemStr;
-
-              // Extract price if present
-              // Note: When quantity > 1, the price shown is the TOTAL price (e.g., "2x Item: $17.98" means $17.98 total)
-              const priceMatch = itemNameWithPrice.match(/:\s*\$([\d.]+)/);
-              const totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
-
-              // Remove price from item name
-              const itemName = itemNameWithPrice.replace(/:\s*\$[\d.]+.*$/, '').trim();
-
-              // Calculate unit price
-              let unitPrice: number;
-              if (totalPrice !== null) {
-                unitPrice = totalPrice / quantity; // Divide total by quantity to get unit price
-              } else {
-                // If no price found, try to get from menu items or default
-                const matchingMenuItem = menuItems.find(mi =>
-                  mi.name.toLowerCase() === itemName.toLowerCase() ||
-                  itemName.toLowerCase().includes(mi.name.toLowerCase())
-                );
-
-                if (matchingMenuItem) {
-                  unitPrice = parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, ''));
-                } else {
-                  // Default price if none found ($9.99)
-                  unitPrice = 9.99;
-                }
-              }
-
-              // Create separate line items for each quantity
-              // Note: unitQty is only for items priced PER_UNIT (with scaling factor 1000)
-              // For regular items with quantities, we create separate line items
-              for (let i = 0; i < quantity; i++) {
-                const lineItem: any = {
-                  name: itemName,
-                  price: Math.round(unitPrice * 100), // Price in cents (unit price, not total)
-                };
-
-                // Ensure price is valid (positive integer)
-                if (lineItem.price > 0) {
-                  lineItems.push(lineItem);
-                } else {
-                  console.warn(`[Clover] Skipping line item with invalid price: ${itemName} (price: ${lineItem.price})`);
-                }
-              }
-            }
-
-            // Create atomic order payload according to Clover API
-            // Clover atomic order expects a "cart" object with lineItems
-            const atomicOrderPayload: any = {
-              orderCart: {
-                lineItems: lineItems,
-              },
-            };
-
-            // Add title if customer name is available
-            if (order.firstName || order.lastName) {
-              atomicOrderPayload.title = `Order from ${order.firstName || ''} ${order.lastName || ''}`.trim();
-            }
-
-            // Add notes if available
-            if (orderDetails?.notes || order.notes) {
-              atomicOrderPayload.note = orderDetails?.notes || order.notes || undefined;
-            }
-
-            // Ensure we have line items before creating order
-            if (lineItems.length === 0) {
-              console.log(`[Clover] Skipping Clover order creation - no valid line items parsed`);
-            } else {
-              console.log(`[Clover] Creating atomic order for merchant ${merchantId} with ${lineItems.length} items`);
-              console.log(`[Clover] Atomic order payload:`, JSON.stringify(atomicOrderPayload, null, 2));
-
-              // Create the atomic order in Clover
-              const cloverResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/atomic_order/orders`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${accessToken}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(atomicOrderPayload),
-              });
-
-              if (cloverResponse.ok) {
-                const cloverOrder = await cloverResponse.json();
-                console.log(`[Clover] ✓ Successfully created order ${cloverOrder.id} in Clover`);
-              } else {
-                const errorText = await cloverResponse.text();
-                console.error(`[Clover] Failed to create order in Clover (${cloverResponse.status}):`, errorText);
-                // Don't fail the request if Clover creation fails
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('[Clover] Error creating order in Clover:', error);
-        // Don't fail the request if Clover creation fails - order is still saved locally
-      }
+      await createCloverOrder(storage, userId, order, orderDetails);
 
       // 6. Send confirmation message to customer
       try {
@@ -1552,25 +661,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.addMessageToOrder(userId, orderId, confirmationMessage);
         await storage.updateOrderLastMessage(orderId, new Date());
 
-        // Broadcast confirmation message to all connected WebSocket clients for this user
-        const userWs = userWebSockets.get(userId);
-        if (userWs && userWs.size > 0) {
-          let sentCount = 0;
-          userWs.forEach((clientWs) => {
-            if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({
-                type: 'message_received',
-                messageId: confirmationMessageId,
-                text: confirmationMessage.text,
-                timestamp: confirmationMessage.timestamp,
-                isOutgoing: false,
-                orderId: orderId,
-              }));
-              sentCount++;
-            }
-          });
-          console.log(`[Send to Preparation] ✓ Broadcasted confirmation message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
-        }
+        console.log(`[Send to Preparation] Confirmation message prepared for order ${orderId}`);
       } catch (error) {
         console.error('[Send to Preparation] Error sending confirmation message:', error);
         // Don't fail the request if message sending fails
@@ -1578,8 +669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         success: true,
-        message: 'Order sent to preparation successfully',
-        customerId: customer.id
+        message: 'Order sent to preparation successfully'
       });
     } catch (error) {
       console.error('Error sending order to preparation:', error);
@@ -1602,24 +692,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update order status to Ready
       await storage.updateOrderStatus(orderId, 'Ready');
 
-      // Find the customer for this order
-      const customer = await storage.getCustomerByPhoneNumber(userId, order.number);
-      if (customer) {
-        // Get the latest order history entry for this customer
-        const latestHistory = await storage.getLatestOrderHistoryByCustomer(customer.id);
-        if (latestHistory) {
-          // Update the latest order history status to Ready
-          await storage.updateOrderHistory(latestHistory.id, {
-            status: 'Ready',
-          });
-          console.log(`[Mark Ready] Updated order history ${latestHistory.id} to Ready for customer ${customer.id}`);
-        } else {
-          console.log(`[Mark Ready] No order history found for customer ${customer.id}`);
-        }
-      } else {
-        console.log(`[Mark Ready] No customer found for order ${orderId} with phone ${order.number}`);
-      }
-
       // Send ready for pickup message to customer
       try {
         const readyMessageId = randomUUID();
@@ -1634,25 +706,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.addMessageToOrder(userId, orderId, readyMessage);
         await storage.updateOrderLastMessage(orderId, new Date());
 
-        // Broadcast ready message to all connected WebSocket clients for this user
-        const userWs = userWebSockets.get(userId);
-        if (userWs && userWs.size > 0) {
-          let sentCount = 0;
-          userWs.forEach((clientWs) => {
-            if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({
-                type: 'message_received',
-                messageId: readyMessageId,
-                text: readyMessage.text,
-                timestamp: readyMessage.timestamp,
-                isOutgoing: false,
-                orderId: orderId,
-              }));
-              sentCount++;
-            }
-          });
-          console.log(`[Mark Ready] ✓ Broadcasted ready message to ${sentCount} WebSocket connection(s) for order ${orderId}`);
-        }
+        console.log(`[Mark Ready] Ready message prepared for order ${orderId}`);
       } catch (error) {
         console.error('[Mark Ready] Error sending ready message:', error);
         // Don't fail the request if message sending fails
@@ -1680,24 +734,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update order status to Completed and update lastMessage to track completion date
       await storage.updateOrderStatus(orderId, 'Completed');
       await storage.updateOrderLastMessage(orderId, new Date());
-
-      // Find the customer for this order
-      const customer = await storage.getCustomerByPhoneNumber(userId, order.number);
-      if (customer) {
-        // Get the latest order history entry for this customer
-        const latestHistory = await storage.getLatestOrderHistoryByCustomer(customer.id);
-        if (latestHistory) {
-          // Update the latest order history status to Completed
-          await storage.updateOrderHistory(latestHistory.id, {
-            status: 'Completed',
-          });
-          console.log(`[Mark Picked Up] Updated order history ${latestHistory.id} to Completed for customer ${customer.id}`);
-        } else {
-          console.log(`[Mark Picked Up] No order history found for customer ${customer.id}`);
-        }
-      } else {
-        console.log(`[Mark Picked Up] No customer found for order ${orderId} with phone ${order.number}`);
-      }
 
       res.json({ success: true, message: 'Order marked as picked up' });
     } catch (error) {
@@ -1749,8 +785,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const messages = (conversation.messages as Message[]) || [];
 
-      // Generate AI suggested response (don't broadcast via WebSocket, just return it)
-      const suggestedResponse = await generateAISuggestedResponse(messages, userId, orderId, undefined, false);
+      // Generate AI suggested response and return it to the client
+      const suggestedResponse = await generateAISuggestedResponse(messages, userId, orderId);
 
       // Return in API response - client will display it directly
       res.json({ success: true, suggestion: suggestedResponse });
@@ -1789,6 +825,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.addMessageToOrder(userId, orderId, rodMessage);
       await storage.updateOrderLastMessage(orderId, new Date());
 
+      const isTestConversation =
+        aiConversationContexts.has(orderId) ||
+        order.firstMessage === INITIAL_TEST_GREETING;
+
+      if (isTestConversation) {
+        let context = aiConversationContexts.get(orderId);
+        if (!context) {
+          const fallbackPrompt = `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${order.firstName || 'Alex'} ${order.lastName || 'Taylor'}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`;
+          context = [{ role: 'system' as const, content: fallbackPrompt }];
+        }
+
+        context.push({
+          role: 'user',
+          content: `Rod (restaurant manager) says: ${message.trim()}`,
+        });
+
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: context,
+          temperature: 0.9,
+          max_tokens: 150,
+        });
+
+        const rawResponse = completion.choices[0].message.content || 'Thanks!';
+        const aiResponse = rawResponse.trim() || 'Thanks!';
+
+        context.push({
+          role: 'assistant',
+          content: aiResponse,
+        });
+        aiConversationContexts.set(orderId, context);
+
+        const aiMessage: Message = {
+          id: randomUUID(),
+          text: aiResponse,
+          isOutgoing: true,
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessageToOrder(userId, orderId, aiMessage);
+        await storage.updateOrderLastMessage(orderId, new Date());
+
+        triggerDebouncedOrderDetection(userId, orderId);
+
+        const conversation = await storage.getOrderConversation(userId, orderId);
+        const messages = (conversation?.messages as Message[]) || [];
+
+        return res.json({
+          success: true,
+          aiMessage: {
+            id: aiMessage.id,
+            text: aiMessage.text,
+            isOutgoing: aiMessage.isOutgoing,
+            timestamp: aiMessage.timestamp,
+            isAIOrganized: false,
+          },
+          messages,
+          aiResponded: true,
+        });
+      }
+
       // Trigger debounced order detection after Rod's message
       triggerDebouncedOrderDetection(userId, orderId);
 
@@ -1806,79 +902,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       })();
 
-      // Check if this is an AI test conversation
-      const context = aiConversationContexts.get(orderId);
-
-      if (context) {
-        // This is an AI conversation, get AI response
-        // Add Rod's message to context
-        context.push({
-          role: 'user',
-          content: `Rod (restaurant manager) says: ${message.trim()}`
-        });
-
-        // Get AI response
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: context,
-          temperature: 0.9,
-          max_tokens: 150,
-        });
-
-        const aiResponse = completion.choices[0].message.content || "Thanks!";
-
-        // Add AI response to context
-        context.push({
-          role: 'assistant',
-          content: aiResponse
-        });
-
-        // Save AI response to database
-        // isOutgoing: true = customer messages (AI responses)
-        const aiMessage: Message = {
-          id: randomUUID(),
-          text: aiResponse,
-          isOutgoing: true,
-          timestamp: new Date().toISOString(),
-        };
-        await storage.addMessageToOrder(userId, orderId, aiMessage);
-        await storage.updateOrderLastMessage(orderId, new Date());
-
-        // Trigger debounced order detection after AI response
-        triggerDebouncedOrderDetection(userId, orderId);
-
-        // Generate AI suggested response asynchronously
-        (async () => {
-          try {
-            const conversation = await storage.getOrderConversation(userId, orderId);
-            if (conversation) {
-              const allMessages = (conversation.messages as Message[]) || [];
-              await generateAISuggestedResponse(allMessages, userId, orderId);
-              console.log("AI suggested response generated");
-            }
-          } catch (error) {
-            console.error(`[REST API] Error generating AI suggested response:`, error);
-          }
-        })();
-      } else {
-        // Regular chat (non-AI) - customer messages come from external sources
-        // Trigger debounced order detection when customer messages are received
-        triggerDebouncedOrderDetection(userId, orderId);
-
-        // Generate AI suggested response asynchronously
-        (async () => {
-          try {
-            const conversation = await storage.getOrderConversation(userId, orderId);
-            if (conversation) {
-              const allMessages = (conversation.messages as Message[]) || [];
-              await generateAISuggestedResponse(allMessages, userId, orderId);
-            }
-          } catch (error) {
-            console.error(`[REST API] Error generating AI suggested response:`, error);
-          }
-        })();
-      }
-
       res.json({ success: true });
     } catch (error) {
       next(error);
@@ -1888,89 +911,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AI Test Conversation routes
 
   // Start a new test conversation
-  app.post("/api/test-conversation/start", async (req, res) => {
+  app.post("/api/test-conversation/start", isAuthenticated, async (req, res, next) => {
     try {
-      const conversationId = `test-${Date.now()}`;
-      const customerNames = ['Sarah', 'Mike', 'Emma', 'David', 'Olivia', 'James'];
-      const randomName = customerNames[Math.floor(Math.random() * customerNames.length)];
+      const userId = (req.user as any).id;
 
-      // Initialize conversation context
-      const systemPrompt = `You are a customer named ${randomName} texting Corn on the Corner, a street food vendor in Dearborn, Michigan. You want to place an order for corn-based menu items.
+      // Create randomized customer profile
+      const { firstName, lastName } = generateRandomName();
+      const phoneNumber = generateRandomPhoneNumber();
 
-Menu items available:
-- Classic Elote Cup ($8.99)
-- Buffalo Ranch Elote ($9.99)
-- Flamin Hot Cheetos Elote ($10.99)
-- Bacon Cheddar Elote ($11.99)
-- Nacho Cheese Elote ($9.99)
-- Corn Ribs ($7.99)
-- Street Corn Dog ($6.99)
-- Churro Bites ($5.99)
-- Tajin Fries ($4.99)
-
-You should:
-1. Text casually like a real customer (informal, brief messages)
-2. Start by introducing yourself and placing an order
-3. Mention when you want to pick it up (e.g., "15 minutes", "20 min", "in half an hour")
-4. Be natural and friendly
-5. Keep messages short and realistic
-6. Respond naturally to Rod (the manager) when he replies
-
-Start the conversation now by texting your order.`;
-
-      aiConversationContexts.set(conversationId, [
-        { role: 'system', content: systemPrompt }
-      ]);
-
-      // Get initial AI message
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: aiConversationContexts.get(conversationId)!,
-        temperature: 0.9,
-        max_tokens: 150,
+      // Create an empty order shell for the simulated conversation
+      const newOrder = await storage.createOrder({
+        userId,
+        firstName,
+        lastName,
+        number: phoneNumber,
+        firstMessage: INITIAL_TEST_GREETING,
+        status: 'New',
+        lastMessage: new Date(),
+        pickupTime: null,
+        items: [],
+        orderPrice: '0.00',
+        notes: '',
+        orderMade: false,
+        pickupTimeDetected: false,
       });
 
-      const initialMessage = completion.choices[0].message.content || "Hi! I'd like to place an order";
+      // Seed the conversation with the initial greeting from Rod
+      const initialGreeting: Message = {
+        id: randomUUID(),
+        text: INITIAL_TEST_GREETING,
+        isOutgoing: false,
+        timestamp: new Date().toISOString(),
+      };
 
-      // Add AI response to context
-      aiConversationContexts.get(conversationId)!.push({
-        role: 'assistant',
-        content: initialMessage
+      await storage.createOrderConversation({
+        userId,
+        orderId: newOrder.id,
+        number: phoneNumber,
+        messages: [initialGreeting],
+        updatedAt: new Date(),
       });
 
-      res.json({
-        conversationId,
-        customerName: randomName,
-        initialMessage,
-      });
-    } catch (error: any) {
-      console.error('Error starting test conversation:', error);
-      res.status(500).json({ message: 'Failed to start test conversation', error: error.message });
-    }
-  });
+      const systemPrompt = `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${firstName} ${lastName}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`;
 
-  // Send message to AI and get response
-  app.post("/api/test-conversation/message", async (req, res) => {
-    try {
-      const { conversationId, message } = req.body;
+      const context: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: `Rod (restaurant manager) says: ${INITIAL_TEST_GREETING}`,
+        },
+      ];
 
-      if (!conversationId || !message) {
-        return res.status(400).json({ message: 'Missing conversationId or message' });
-      }
-
-      const context = aiConversationContexts.get(conversationId);
-
-      if (!context) {
-        return res.status(404).json({ message: 'Conversation not found' });
-      }
-
-      // Add user message to context
-      context.push({
-        role: 'user',
-        content: `Rod (restaurant manager) says: ${message}`
-      });
-
-      // Get AI response
+      // Generate the AI customer's response
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: context,
@@ -1978,381 +970,191 @@ Start the conversation now by texting your order.`;
         max_tokens: 150,
       });
 
-      const aiResponse = completion.choices[0].message.content || "Thanks!";
+      const rawResponse = completion.choices[0].message.content || "Thanks!";
+      const aiResponse = rawResponse.trim() || "Thanks!";
 
-      // Add AI response to context
       context.push({
-        role: 'assistant',
-        content: aiResponse
+        role: 'assistant' as const,
+        content: aiResponse,
       });
+
+      aiConversationContexts.set(newOrder.id, context);
+
+      const aiMessage: Message = {
+        id: randomUUID(),
+        text: aiResponse,
+        isOutgoing: true,
+        timestamp: new Date().toISOString(),
+      };
+
+      await storage.addMessageToOrder(userId, newOrder.id, aiMessage);
+      await storage.updateOrderLastMessage(newOrder.id, new Date());
+
+      triggerDebouncedOrderDetection(userId, newOrder.id);
+
+      const conversation = await storage.getOrderConversation(userId, newOrder.id);
+      const messages = (conversation?.messages as Message[]) || [initialGreeting, aiMessage];
 
       res.json({
-        response: aiResponse,
+        success: true,
+        orderId: newOrder.id,
+        phoneNumber,
+        customerName: `${firstName} ${lastName}`,
+        messages,
+        aiMessage,
+        aiResponded: true,
       });
-    } catch (error: any) {
-      console.error('Error getting AI response:', error);
-      res.status(500).json({ message: 'Failed to get AI response', error: error.message });
+    } catch (error) {
+      console.error('Error starting test conversation:', error);
+      next(error);
+    }
+  });
+
+  // Send message to AI and get response
+  app.post("/api/test-conversation/message", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId, message } = req.body;
+      const userId = (req.user as any).id;
+
+      if (!orderId || !message || !message.trim()) {
+        return res.status(400).json({ message: 'Missing orderId or message text' });
+      }
+
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      // Persist Rod's message to the conversation
+      const rodMessage: Message = {
+        id: randomUUID(),
+        text: message.trim(),
+        isOutgoing: false,
+        timestamp: new Date().toISOString(),
+      };
+      await storage.addMessageToOrder(userId, orderId, rodMessage);
+      await storage.updateOrderLastMessage(orderId, new Date());
+
+      // Prepare or restore the AI context for this conversation
+      let context = aiConversationContexts.get(orderId);
+      if (!context) {
+        const fallbackPrompt = `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${order.firstName || 'Alex'} ${order.lastName || 'Taylor'}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`;
+        context = [{ role: 'system' as const, content: fallbackPrompt }];
+        aiConversationContexts.set(orderId, context);
+      }
+
+      context.push({
+        role: 'user',
+        content: `Rod (restaurant manager) says: ${message.trim()}`
+      });
+
+      // Generate the AI customer's response
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: context,
+        temperature: 0.9,
+        max_tokens: 150,
+      });
+
+      const rawResponse = completion.choices[0].message.content || "Thanks!";
+      const aiResponse = rawResponse.trim() || "Thanks!";
+
+      context.push({
+        role: 'assistant',
+        content: aiResponse,
+      });
+
+      // Persist the AI customer's reply
+      const aiMessage: Message = {
+        id: randomUUID(),
+        text: aiResponse,
+        isOutgoing: true,
+        timestamp: new Date().toISOString(),
+      };
+      await storage.addMessageToOrder(userId, orderId, aiMessage);
+      await storage.updateOrderLastMessage(orderId, new Date());
+
+      // Trigger downstream automation
+      triggerDebouncedOrderDetection(userId, orderId);
+
+      const conversation = await storage.getOrderConversation(userId, orderId);
+      const messages = (conversation?.messages as Message[]) || [];
+
+      res.json({
+        success: true,
+        aiMessage: {
+          id: aiMessage.id,
+          text: aiMessage.text,
+          isOutgoing: aiMessage.isOutgoing,
+          timestamp: aiMessage.timestamp,
+          isAIOrganized: (aiMessage as any).isAIOrganized || false,
+        },
+        messages,
+        aiResponded: true,
+      });
+    } catch (error) {
+      console.error('Error handling test conversation message:', error);
+      next(error);
+    }
+  });
+
+  app.get("/api/orders/:orderId/ai-suggested-reply", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      const conversation = await storage.getOrderConversation(userId, orderId);
+      if (!conversation) {
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+
+      const allMessages = (conversation.messages as Message[]) || [];
+      const suggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+
+      res.json({ suggestion });
+    } catch (error) {
+      console.error('Error generating AI suggested reply:', error);
+      next(error);
+    }
+  });
+
+  app.get("/api/orders/:orderId/ai-order-summary", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      const conversation = await storage.getOrderConversation(userId, orderId);
+      if (!conversation) {
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+
+      const messages = (conversation.messages as Message[]) || [];
+      const menuItems = await getMenuItemsWithCache(userId);
+      const analysis = await analyzeOrderFromConversation(messages, order.firstName || undefined, menuItems);
+
+      if (!analysis.orderMade || !analysis.orderDetails) {
+        return res.json({ orderMade: false, summary: null, details: analysis.orderDetails ?? null });
+      }
+
+      const summary = formatOrderMessage(analysis.orderDetails, menuItems);
+
+      res.json({
+        orderMade: true,
+        summary,
+        details: analysis.orderDetails,
+      });
+    } catch (error) {
+      console.error('Error generating AI order summary:', error);
+      next(error);
     }
   });
 
   const httpServer = createServer(app);
-
-  // WebSocket server for AI test simulator
-  const wss = new WebSocketServer({ noServer: true });
-
-  // Handle WebSocket upgrade with session authentication
-  httpServer.on('upgrade', async (request, socket, head) => {
-    const pathname = new URL(request.url || '', 'http://localhost').pathname;
-
-    if (pathname === '/ws/test-simulator') {
-      const req = request as any;
-
-      // Create a minimal response object for middleware
-      const res: any = {
-        writeHead: () => { },
-        end: () => socket.destroy(),
-        setHeader: () => { },
-        getHeader: () => undefined,
-        on: () => { },
-        once: () => { },
-        emit: () => { },
-      };
-
-      // Apply session middleware to parse the session from the cookie
-      sessionMiddleware(req, res, () => {
-        // Apply passport middleware to populate req.user
-        passport.initialize()(req, res, () => {
-          passport.session()(req, res, () => {
-            const userId = req.user?.id;
-
-            if (!userId) {
-              console.log('WebSocket connection rejected: not authenticated');
-              socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-              socket.destroy();
-              return;
-            }
-
-            // User is authenticated, proceed with WebSocket upgrade
-            wss.handleUpgrade(request, socket, head, (ws) => {
-              // Attach userId to the WebSocket instance
-              (ws as any).userId = userId;
-              wss.emit('connection', ws, request);
-            });
-          });
-        });
-      });
-    }
-  });
-
-  wss.on('connection', (ws: WebSocket, req: any) => {
-    const userId = (ws as any).userId;
-    console.log('WebSocket client connected to test simulator, userId:', userId);
-
-    // Add WebSocket to user's connection set for broadcasting updates
-    if (userId) {
-      if (!userWebSockets.has(userId)) {
-        userWebSockets.set(userId, new Set());
-      }
-      userWebSockets.get(userId)!.add(ws);
-    }
-
-    ws.on('message', async (data: Buffer) => {
-      try {
-        const message = JSON.parse(data.toString());
-        const { type, text, orderId, phoneNumber } = message;
-
-        if (type === 'start') {
-          // Create new test conversation
-          const { firstName, lastName } = generateRandomName();
-          const phone = generateRandomPhoneNumber();
-
-          // Create initial order in database with EMPTY order details
-          // Rod will fill in the details manually as the conversation progresses
-          const order = await storage.createOrder({
-            userId,
-            firstName,
-            lastName,
-            number: phone,
-            firstMessage: 'Welcome to Corn on the Corner! 🌽',
-            status: 'New',
-            lastMessage: new Date(),
-            pickupTime: null,
-            items: [],
-            orderPrice: '0.00',
-            notes: '',
-            orderMade: false, // Explicitly set to false for new orders
-            pickupTimeDetected: false, // Explicitly set to false for new orders
-          });
-
-          // Create conversation row with initial greeting message
-          const initialGreeting: Message = {
-            id: randomUUID(),
-            text: 'Welcome to Corn on the Corner! 🌽',
-            isOutgoing: false,
-            timestamp: new Date().toISOString(),
-          };
-
-          await storage.createOrderConversation({
-            userId,
-            orderId: order.id,
-            number: phone,
-            messages: [initialGreeting],
-            updatedAt: new Date(),
-          });
-
-          // Initialize AI context
-          const context = [
-            {
-              role: 'system' as const,
-              content: `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${firstName} ${lastName}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`
-            }
-          ];
-          aiConversationContexts.set(order.id, context);
-
-          ws.send(JSON.stringify({
-            type: 'conversation_started',
-            orderId: order.id,
-            phoneNumber: phone,
-            customerName: `${firstName} ${lastName}`,
-          }));
-
-
-        } else if (type === 'send_message') {
-          // Rod sends a message - support both AI test conversations and regular conversations
-          if (!orderId || !text || !text.trim()) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Missing orderId or message text' }));
-            return;
-          }
-
-          // Verify order exists
-          const order = await storage.getOrderById(userId, orderId);
-          if (!order) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Order not found' }));
-            return;
-          }
-
-          // Save Rod's message to database immediately
-          const rodMessageId = randomUUID();
-          const rodMessage: Message = {
-            id: rodMessageId,
-            text: text.trim(),
-            isOutgoing: false,
-            timestamp: new Date().toISOString(),
-          };
-          await storage.addMessageToOrder(userId, orderId, rodMessage);
-          await storage.updateOrderLastMessage(orderId, new Date());
-
-          // Send Rod's message immediately to frontend so it appears instantly
-          ws.send(JSON.stringify({
-            type: 'message_sent',
-            messageId: rodMessageId,
-            text: text.trim(),
-            timestamp: rodMessage.timestamp,
-            orderId: orderId,
-          }));
-
-          // Trigger debounced order detection after Rod's message
-          triggerDebouncedOrderDetection(userId, orderId, ws);
-
-          // Generate AI suggested response asynchronously with a delay
-          // Delay it to avoid interfering with the AI response that's about to stream
-          setTimeout(async () => {
-            try {
-              const conversation = await storage.getOrderConversation(userId, orderId);
-              if (conversation) {
-                const allMessages = (conversation.messages as Message[]) || [];
-                await generateAISuggestedResponse(allMessages, userId, orderId, ws);
-              }
-            } catch (error) {
-              console.error(`[WebSocket] Error generating AI suggested response:`, error);
-            }
-          }, 1000); // Delay to let AI response start streaming first
-
-          // Check if this is an AI test conversation
-          const context = aiConversationContexts.get(orderId);
-
-          if (context) {
-            // This is an AI conversation - get streaming AI response
-
-            // Add Rod's message to context
-            const contextMessage = `Rod (restaurant manager) says: ${text.trim()}`;
-            context.push({
-              role: 'user',
-              content: contextMessage
-            });
-
-            // Create a placeholder message ID for the streaming response
-            const aiMessageId = randomUUID();
-
-            // Send initial message signal to create placeholder on client
-            ws.send(JSON.stringify({
-              type: 'message_stream_start',
-              messageId: aiMessageId,
-              orderId: orderId,
-              timestamp: new Date().toISOString(),
-            }));
-
-            // Get AI response with streaming
-            const stream = await openai.chat.completions.create({
-              model: 'gpt-4o-mini',
-              messages: context,
-              temperature: 0.9,
-              max_tokens: 150,
-              stream: true,
-            });
-
-            let aiResponse = '';
-
-            // Stream chunks to client
-            for await (const chunk of stream) {
-              const content = chunk.choices[0]?.delta?.content || '';
-              if (content) {
-                aiResponse += content;
-                // Send each chunk to client
-                ws.send(JSON.stringify({
-                  type: 'message_stream_chunk',
-                  messageId: aiMessageId,
-                  orderId: orderId,
-                  text: content,
-                }));
-              }
-            }
-
-            // If no response, use default
-            if (!aiResponse) {
-              aiResponse = "Thanks!";
-              ws.send(JSON.stringify({
-                type: 'message_stream_chunk',
-                messageId: aiMessageId,
-                orderId: orderId,
-                text: aiResponse,
-              }));
-            }
-
-            // Send stream complete signal
-            ws.send(JSON.stringify({
-              type: 'message_stream_complete',
-              messageId: aiMessageId,
-              orderId: orderId,
-              timestamp: new Date().toISOString(),
-            }));
-
-            // Add AI response to context
-            context.push({
-              role: 'assistant',
-              content: aiResponse
-            });
-
-            // Save AI response to database (always save, even if empty)
-            const finalAiResponse = aiResponse || "Thanks!";
-            const aiMessage: Message = {
-              id: aiMessageId,
-              text: finalAiResponse,
-              isOutgoing: true,
-              timestamp: new Date().toISOString(),
-            };
-            try {
-              console.log(`[WebSocket] Saving AI response to database for order ${orderId}: ${finalAiResponse.substring(0, 50)}...`);
-              await storage.addMessageToOrder(userId, orderId, aiMessage);
-              await storage.updateOrderLastMessage(orderId, new Date());
-              console.log(`[WebSocket] AI response saved successfully to order ${orderId}`);
-            } catch (saveError) {
-              console.error(`[WebSocket] Error saving AI response for order ${orderId}:`, saveError);
-              // Try to send error to client
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'error',
-                  message: 'Failed to save AI response to database'
-                }));
-              }
-            }
-
-            // Trigger debounced order detection after AI response is saved
-            // This will analyze the conversation after 2 seconds of no new messages
-            triggerDebouncedOrderDetection(userId, orderId, ws);
-
-            // Generate AI suggested response asynchronously with a delay to avoid blocking/interfering with message display
-            // This runs independently and doesn't block the AI response streaming
-            setTimeout(async () => {
-              try {
-                const conversation = await storage.getOrderConversation(userId, orderId);
-                if (conversation) {
-                  const allMessages = (conversation.messages as Message[]) || [];
-                  await generateAISuggestedResponse(allMessages, userId, orderId, ws);
-                }
-              } catch (error) {
-                console.error(`[WebSocket] Error generating AI suggested response:`, error);
-              }
-            }, 500); // Small delay to let the AI message display smoothly first
-          } else {
-            // Regular conversation (not AI test) - no AI response needed
-            // Message is already saved and sent to frontend above
-            console.log(`[WebSocket] Message sent to regular conversation ${orderId}, no AI response`);
-
-            // Generate AI suggested response asynchronously with a small delay
-            setTimeout(async () => {
-              try {
-                const conversation = await storage.getOrderConversation(userId, orderId);
-                if (conversation) {
-                  const allMessages = (conversation.messages as Message[]) || [];
-                  await generateAISuggestedResponse(allMessages, userId, orderId, ws);
-                }
-              } catch (error) {
-                console.error(`[WebSocket] Error generating AI suggested response:`, error);
-              }
-            }, 300); // Small delay for regular conversations
-          }
-        }
-      } catch (error: any) {
-        console.error('WebSocket error:', error);
-        ws.send(JSON.stringify({ type: 'error', message: error.message }));
-      }
-    });
-
-    ws.on('close', () => {
-      console.log('WebSocket client disconnected');
-      // Remove WebSocket from user's connection set
-      if (userId && userWebSockets.has(userId)) {
-        userWebSockets.get(userId)!.delete(ws);
-        if (userWebSockets.get(userId)!.size === 0) {
-          userWebSockets.delete(userId);
-        }
-      }
-    });
-  });
-
-  // Set up periodic refresh for menu item popularity aggregates (every 15 minutes)
-  setInterval(async () => {
-    try {
-      // Get all users and refresh their aggregates
-      const allUsers = await db.select().from(users);
-      for (const user of allUsers) {
-        try {
-          await storage.refreshMenuItemPopularityAggregates(user.id);
-        } catch (error) {
-          console.error(`Error refreshing aggregates for user ${user.id}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error('Error in periodic aggregate refresh:', error);
-    }
-  }, 15 * 60 * 1000); // 15 minutes
-
-  // Refresh aggregates on server start for all users
-  (async () => {
-    try {
-      const allUsers = await db.select().from(users);
-      for (const user of allUsers) {
-        try {
-          await storage.refreshMenuItemPopularityAggregates(user.id);
-        } catch (error) {
-          console.error(`Error refreshing aggregates for user ${user.id} on startup:`, error);
-        }
-      }
-    } catch (error) {
-      console.error('Error in startup aggregate refresh:', error);
-    }
-  })();
 
   // API endpoint to manually refresh aggregates
   app.post("/api/analytics/refresh-aggregates", isAuthenticated, async (req, res, next) => {

@@ -12,7 +12,7 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   getOrdersByStatus(userId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<Order[]>;
   getOrderConversation(userId: string, orderId: string): Promise<OrderConversation | undefined>;
-  getOrderCounts(userId: string): Promise<{ new: number; confirmed: number; ready: number; completed: number }>;
+  getOrderCounts(userId: string): Promise<{ new: number; confirmed: number; ready: number; }>;
   createOrder(order: InsertOrder): Promise<Order>;
   createOrderConversation(conversation: InsertOrderConversation): Promise<OrderConversation>;
   updateOrderLastMessage(orderId: string, lastMessage: Date): Promise<void>;
@@ -60,61 +60,38 @@ export class DbStorage implements IStorage {
   }
 
   async getOrdersByStatus(userId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<Order[]> {
-    // For completed orders, only show orders completed today
-    if (status === 'Completed') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Start of today
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1); // Start of tomorrow
-      
-      // Filter completed orders by lastMessage date being today
-      // This is a reasonable proxy - if the order was last active today, it was likely completed today
-      const result = await db.select()
-        .from(orders)
-        .where(and(
-          eq(orders.userId, userId),
-          eq(orders.status, status),
-          gte(orders.lastMessage, today),
-          lt(orders.lastMessage, tomorrow)
-        ))
-        .orderBy(desc(orders.lastMessage));
-      return result;
-    }
-    
-    // For other statuses, return all orders with that status
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
     const result = await db.select()
       .from(orders)
       .where(and(
         eq(orders.userId, userId),
-        eq(orders.status, status)
+        eq(orders.status, status),
+        gte(orders.lastMessage, today),
+        lt(orders.lastMessage, tomorrow)
       ))
       .orderBy(desc(orders.lastMessage));
     return result;
   }
 
-  async getOrderCounts(userId: string): Promise<{ new: number; confirmed: number; ready: number; completed: number }> {
+  async getOrderCounts(userId: string): Promise<{ new: number; confirmed: number; ready: number; }> {
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
     const allOrders = await db.select()
       .from(orders)
-      .where(eq(orders.userId, userId));
-    
-    // For completed count, only count orders completed today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of today
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1); // Start of tomorrow
-    
-    const completedToday = allOrders.filter(o => {
-      if (o.status !== 'Completed') return false;
-      if (!o.lastMessage) return false;
-      const lastMessageDate = new Date(o.lastMessage);
-      return lastMessageDate >= today && lastMessageDate < tomorrow;
-    });
-    
+      .where(and(eq(orders.userId, userId), gte(orders.lastMessage, today), lt(orders.lastMessage, tomorrow)));
+
     return {
       new: allOrders.filter(o => o.status === 'New').length,
       confirmed: allOrders.filter(o => o.status === 'Confirmed').length,
       ready: allOrders.filter(o => o.status === 'Ready').length,
-      completed: completedToday.length,
     };
   }
 
@@ -191,7 +168,7 @@ export class DbStorage implements IStorage {
 
       // Update conversation row with new messages array
       await db.update(orderConversations)
-        .set({ 
+        .set({
           messages: updatedMessages,
           updatedAt: new Date()
         })
@@ -280,11 +257,11 @@ export class DbStorage implements IStorage {
         eq(menuItems.name, item.name)
       ))
       .limit(1);
-    
+
     if (existingItem.length > 0) {
       throw new Error(`A menu item with the name "${item.name}" already exists`);
     }
-    
+
     const result = await db.insert(menuItems).values({ ...item, userId }).returning();
     return result[0];
   }
@@ -301,12 +278,12 @@ export class DbStorage implements IStorage {
           ne(menuItems.id, itemId)
         ))
         .limit(1);
-      
+
       if (existingItem.length > 0) {
         throw new Error(`A menu item with the name "${item.name}" already exists`);
       }
     }
-    
+
     const updatedItem = { ...item, updatedAt: new Date() };
     const result = await db.update(menuItems)
       .set(updatedItem)
@@ -315,7 +292,7 @@ export class DbStorage implements IStorage {
         eq(menuItems.userId, userId)
       ))
       .returning();
-    
+
     if (!result[0]) {
       throw new Error('Menu item not found');
     }
@@ -329,7 +306,7 @@ export class DbStorage implements IStorage {
         eq(menuItems.userId, userId)
       ))
       .returning();
-    
+
     if (!result[0]) {
       throw new Error('Menu item not found');
     }
@@ -417,7 +394,7 @@ export class DbStorage implements IStorage {
       .where(eq(customers.userId, userId));
 
     const customerIds = userCustomers.map(c => c.id);
-    
+
     if (customerIds.length === 0) {
       return { orders: [], total: 0, hasMore: false };
     }
@@ -426,7 +403,7 @@ export class DbStorage implements IStorage {
     const totalResult = await db.select({ count: sql<number>`count(*)` })
       .from(orderHistory)
       .where(inArray(orderHistory.customerId, customerIds));
-    
+
     const total = Number(totalResult[0]?.count || 0);
 
     // Get paginated order history with customer info
@@ -503,7 +480,7 @@ export class DbStorage implements IStorage {
     for (const history of orderHistories) {
       const orderSummary = history.orderSummary as any;
       const items = orderSummary?.items || [];
-      
+
       if (!items || items.length === 0) {
         console.log(`[Analytics] Order history ${history.id} has no items`);
         continue;
@@ -512,7 +489,7 @@ export class DbStorage implements IStorage {
       const orderDate = new Date(history.createdAt);
       // Normalize to start of day for daily aggregation
       orderDate.setHours(0, 0, 0, 0);
-      
+
       console.log(`[Analytics] Processing order ${history.id} with ${items.length} items on ${orderDate.toISOString()}`);
 
       for (const itemStr of items) {
@@ -522,7 +499,7 @@ export class DbStorage implements IStorage {
         const itemName = quantityMatch ? quantityMatch[2].trim() : itemStr.split(':')[0].trim();
 
         // Try to find matching menu item
-        let menuItem = allMenuItems.find(mi => 
+        let menuItem = allMenuItems.find(mi =>
           mi.name.toLowerCase() === itemName.toLowerCase() ||
           itemName.toLowerCase().includes(mi.name.toLowerCase()) ||
           mi.name.toLowerCase().includes(itemName.toLowerCase())
@@ -559,7 +536,7 @@ export class DbStorage implements IStorage {
       throw new Error('DATABASE_URL not set');
     }
     const sqlClient = postgres(process.env.DATABASE_URL);
-    
+
     try {
       let upserted = 0;
       for (const aggregate of aggregatesMap.values()) {
@@ -655,7 +632,7 @@ export class DbStorage implements IStorage {
     for (const agg of allAggregates) {
       const aggDate = new Date(agg.date);
       let dateKey: string;
-      
+
       switch (groupBy) {
         case 'day':
           dateKey = aggDate.toISOString().split('T')[0];

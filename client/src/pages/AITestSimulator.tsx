@@ -11,19 +11,41 @@ interface Message {
   text: string;
   isOutgoing: boolean;
   timestamp: string;
-  isStreaming?: boolean;
   isAIOrganized?: boolean;
 }
 
+const DISPLAY_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+};
+
+const formatTimestamp = (value?: string | number | Date) => {
+  const date = value ? new Date(value) : new Date();
+  return date.toLocaleTimeString('en-US', DISPLAY_TIME_OPTIONS);
+};
+
+const toConversationMessage = (apiMessage: any): Message => ({
+  id: apiMessage.id,
+  text: apiMessage.text,
+  isOutgoing: Boolean(apiMessage.isOutgoing),
+  timestamp: formatTimestamp(apiMessage.timestamp),
+  isAIOrganized: apiMessage.isAIOrganized ?? false,
+});
+
 export default function AITestSimulator() {
   const { user, isLoading } = useUser({ redirectTo: '/login' });
-  const [ws, setWs] = useState<WebSocket | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [conversationActive, setConversationActive] = useState(false);
   const [orderId, setOrderId] = useState<string | null>(null);
   const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [orderSummary, setOrderSummary] = useState<string | null>(null);
+  const [isFetchingInsights, setIsFetchingInsights] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = (instant = false) => {
@@ -31,137 +53,147 @@ export default function AITestSimulator() {
   };
 
   useEffect(() => {
-    // Check if any message is currently streaming
-    const hasStreaming = messages.some(msg => msg.isStreaming);
-    scrollToBottom(hasStreaming);
+    scrollToBottom();
   }, [messages]);
 
-  const connectWebSocket = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/test-simulator`;
-    const newWs = new WebSocket(wsUrl);
+  const refreshAIInsights = async (currentOrderId: string) => {
+    setIsFetchingInsights(true);
+    try {
+      const [summaryRes, suggestionRes] = await Promise.all([
+        fetch(`/api/orders/${currentOrderId}/ai-order-summary`),
+        fetch(`/api/orders/${currentOrderId}/ai-suggested-reply`),
+      ]);
 
-    newWs.onopen = () => {
-      console.log('WebSocket connected');
-      setWs(newWs);
-    };
-
-    newWs.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
-      if (data.type === 'conversation_started') {
-        setOrderId(data.orderId);
-        setPhoneNumber(data.phoneNumber);
-        setCustomerName(data.customerName);
-        setConversationActive(true);
-        setMessages([{
-          id: '1',
-          text: 'Welcome to Corn on the Corner! 🌽',
-          isOutgoing: false,
-          timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-        }]);
-      } else if (data.type === 'message_stream_start') {
-        // Create placeholder message for streaming
-        setMessages(prev => [...prev, {
-          id: data.messageId,
-          text: '',
-          isOutgoing: true,
-          timestamp: new Date(data.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-          isStreaming: true,
-        }]);
-      } else if (data.type === 'message_stream_chunk') {
-        // Append chunk to streaming message
-        setMessages(prev => prev.map(msg => 
-          msg.id === data.messageId
-            ? { ...msg, text: msg.text + data.text }
-            : msg
-        ));
-      } else if (data.type === 'message_stream_complete') {
-        // Mark streaming as complete
-        setMessages(prev => prev.map(msg => 
-          msg.id === data.messageId
-            ? { ...msg, isStreaming: false, timestamp: new Date(data.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) }
-            : msg
-        ));
-      } else if (data.type === 'message_received') {
-        // Handle regular messages and AI organized messages
-        // isOutgoing: true = customer messages (left), false = restaurant messages (right)
-        // AI organized messages are from restaurant, so isOutgoing should be false
-        const newMessage: Message = {
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          text: data.text,
-          isOutgoing: data.isAIOrganized ? false : true, // AI organized = restaurant message (right side)
-          timestamp: new Date(data.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-          isAIOrganized: data.isAIOrganized || false,
-        };
-        console.log('[Client] Received message:', newMessage);
-        setMessages(prev => [...prev, newMessage]);
-      } else if (data.type === 'pickup_time_detected') {
-        // Pickup time detected - just log it (not used in AI test simulator)
-        console.log(`[AITestSimulator] Pickup time detected for order ${data.orderId}: ${data.pickupTime}`);
-      } else if (data.type === 'error') {
-        console.error('WebSocket error:', data.message);
+      if (summaryRes.ok) {
+        const summaryData = await summaryRes.json();
+        setOrderSummary(summaryData.summary ?? null);
+      } else {
+        setOrderSummary(null);
       }
-    };
 
-    newWs.onclose = () => {
-      console.log('WebSocket disconnected');
-      setWs(null);
-    };
-
-    newWs.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    return newWs;
+      if (suggestionRes.ok) {
+        const suggestionData = await suggestionRes.json();
+        setAiSuggestion(suggestionData.suggestion ?? null);
+      } else {
+        setAiSuggestion(null);
+      }
+    } catch (error) {
+      console.error('Error refreshing AI insights:', error);
+      setOrderSummary(null);
+      setAiSuggestion(null);
+    } finally {
+      setIsFetchingInsights(false);
+    }
   };
 
-  const startConversation = () => {
-    if (!user) return;
-    
-    const newWs = connectWebSocket();
-    
-    newWs.addEventListener('open', () => {
-      newWs.send(JSON.stringify({
-        type: 'start',
-      }));
-    });
+  const startConversation = async () => {
+    if (!user || isStarting) return;
+
+    setIsStarting(true);
+    setAiSuggestion(null);
+    setOrderSummary(null);
+    try {
+      const response = await fetch('/api/test-conversation/start', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to start test conversation (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      setOrderId(data.orderId);
+      setPhoneNumber(data.phoneNumber);
+      setCustomerName(data.customerName);
+      setConversationActive(true);
+      const normalizedMessages = (data.messages ?? []).map(toConversationMessage);
+      setMessages(normalizedMessages);
+      if (data.orderId) {
+        void refreshAIInsights(data.orderId);
+      }
+    } catch (error) {
+      console.error('Error starting test conversation:', error);
+    } finally {
+      setIsStarting(false);
+    }
   };
 
-  const sendMessage = () => {
-    if (!inputMessage.trim() || !ws || !orderId || !phoneNumber || !user) return;
+  const sendMessage = async () => {
+    if (!inputMessage.trim() || !orderId || !user || isSending) {
+      return;
+    }
 
     const messageText = inputMessage.trim();
-    
-    // Add Rod's message to UI
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+    const outgoingMessage: Message = {
+      id: `rod-${Date.now()}`,
       text: messageText,
       isOutgoing: false,
-      timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-    }]);
+      timestamp: formatTimestamp(),
+    };
 
-    // Send to WebSocket
-    ws.send(JSON.stringify({
-      type: 'send_message',
-      orderId,
-      phoneNumber,
-      text: messageText,
-    }));
-
+    setMessages(prev => [...prev, outgoingMessage]);
     setInputMessage('');
+    setIsSending(true);
+
+    try {
+      const response = await fetch('/api/test-conversation/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          orderId,
+          message: messageText,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send message (${response.status})`);
+      }
+
+      const data = await response.json();
+      const normalizedMessages = (data.messages ?? []).map(toConversationMessage);
+      if (normalizedMessages.length > 0) {
+        setMessages(normalizedMessages);
+      } else if (data.aiMessage) {
+        const aiMessage = toConversationMessage(data.aiMessage);
+        setMessages(prev => [...prev, aiMessage]);
+      }
+
+      if (orderId) {
+        void refreshAIInsights(orderId);
+      }
+    } catch (error) {
+      console.error('Error sending test conversation message:', error);
+      setMessages(prev => prev.filter(msg => msg.id !== outgoingMessage.id));
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    sendMessage();
+    void sendMessage();
+  };
+
+  const resetConversation = () => {
+    setConversationActive(false);
+    setMessages([]);
+    setOrderId(null);
+    setPhoneNumber(null);
+    setCustomerName(null);
+    setAiSuggestion(null);
+    setOrderSummary(null);
+    setInputMessage('');
+    setIsFetchingInsights(false);
   };
 
   if (isLoading) {
@@ -186,13 +218,14 @@ export default function AITestSimulator() {
               <p className="text-zinc-400">
                 Start a test conversation with an AI customer. The conversation will be saved to your orders list in real-time.
               </p>
-              <Button 
+              <Button
                 onClick={startConversation}
                 className="w-full"
                 data-testid="button-start-conversation"
+                disabled={isStarting}
               >
                 <Sparkles className="w-4 h-4 mr-2" />
-                Start Test Conversation
+                {isStarting ? 'Starting...' : 'Start Test Conversation'}
               </Button>
             </div>
           ) : (
@@ -207,7 +240,7 @@ export default function AITestSimulator() {
                 {messages.map((message) => (
                   <MessageBubble
                     key={message.id}
-                    text={message.text + (message.isStreaming ? '|' : '')}
+                    text={message.text}
                     isOutgoing={message.isOutgoing}
                     timestamp={message.timestamp}
                     isAIOrganized={message.isAIOrganized}
@@ -216,27 +249,29 @@ export default function AITestSimulator() {
                 <div ref={messagesEndRef} />
               </div>
 
+              <div className="space-y-3">
+                <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-zinc-400">AI Order Summary</span>
+                    {isFetchingInsights && <span className="text-xs text-zinc-500">Updating…</span>}
+                  </div>
+                  <div className="text-sm text-white whitespace-pre-line min-h-[3rem]">
+                    {orderSummary ?? 'No order summary yet.'}
+                  </div>
+                </div>
+
+                <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-zinc-400">AI Suggested Reply</span>
+                    {isFetchingInsights && <span className="text-xs text-zinc-500">Updating…</span>}
+                  </div>
+                  <div className="text-sm text-white min-h-[2.5rem]">
+                    {aiSuggestion ?? 'No suggestion yet.'}
+                  </div>
+                </div>
+              </div>
+
               <form onSubmit={handleSubmit} className="flex gap-2 items-center">
-                {orderId && ws && (
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      if (!orderId || !ws || ws.readyState !== WebSocket.OPEN) return;
-                      ws.send(JSON.stringify({
-                        type: 'summarize',
-                        orderId: orderId,
-                      }));
-                      console.log('[AITestSimulator] Sent summarize request for order', orderId);
-                    }}
-                    size="icon"
-                    variant="outline"
-                    className="rounded-full border-primary/20 hover:bg-primary/10"
-                    data-testid="button-summarize"
-                    title="Summarize Order"
-                  >
-                    <Sparkles className="w-4 h-4 text-primary" />
-                  </Button>
-                )}
                 <Input
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
@@ -244,10 +279,11 @@ export default function AITestSimulator() {
                   placeholder="Type a message..."
                   className="flex-1 bg-zinc-900 border-zinc-800 text-white"
                   data-testid="input-message"
+                  disabled={isSending}
                 />
                 <Button
                   type="submit"
-                  disabled={!inputMessage.trim()}
+                  disabled={!inputMessage.trim() || isSending}
                   size="icon"
                   className="rounded-full"
                   data-testid="button-send-message"
@@ -257,16 +293,7 @@ export default function AITestSimulator() {
               </form>
 
               <Button
-                onClick={() => {
-                  setConversationActive(false);
-                  setMessages([]);
-                  setOrderId(null);
-                  setPhoneNumber(null);
-                  setCustomerName(null);
-                  if (ws) {
-                    ws.close();
-                  }
-                }}
+                onClick={resetConversation}
                 variant="outline"
                 className="w-full"
                 data-testid="button-end-conversation"
