@@ -9,20 +9,19 @@ import MessageListSkeleton from '@/components/MessageListSkeleton';
 import TabBar from '@/components/TabBar';
 import SideDrawer from '@/components/SideDrawer';
 import type { Conversation, OrderDetails } from '@shared/schema';
+import { useSSE } from '@/providers/SSEProvider';
 
 type Tab = 'new' | 'confirmed' | 'ready';
-
-const INITIAL_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('new');
   const [viewingConversationId, setViewingConversationId] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
 
   // Check if user is authenticated, redirect to login if not
-  const { user, isAuthenticated, isLoading: isAuthLoading } = useUser({ redirectTo: '/login' });
+  const { isAuthenticated, isLoading: isAuthLoading } = useUser({ redirectTo: '/login' });
 
+  const sseContext = useSSE();
 
   // Fetch conversations from API based on active tab (with short cache to prevent flickering)
   const { data: conversations = [], isLoading, error: conversationsError, refetch: refetchConversations } = useQuery<Conversation[]>({
@@ -60,9 +59,6 @@ export default function Home() {
     refetchOnWindowFocus: true, // Refetch when window regains focus
   });
 
-  // No need to filter - API already returns conversations for the active tab
-  const filteredConversations = conversations;
-
   // Use counts from API
   const conversationCounts = counts || {
     new: 0,
@@ -70,9 +66,27 @@ export default function Home() {
     ready: 0,
   };
 
-  const handleConfirmOrder = (conversationId: string) => {
-    console.log('Confirm order requested for', conversationId);
-  };
+  useEffect(() => {
+    if (!sseContext?.lastEvent || sseContext.lastEvent.event !== 'order-message') {
+      return;
+    }
+
+    const payload = (sseContext.lastEvent.data ?? {}) as { orderId?: string };
+    const eventOrderId = typeof payload.orderId === 'string' ? payload.orderId : undefined;
+
+    if (!eventOrderId) {
+      return;
+    }
+
+    if (!viewingConversationId || viewingConversationId !== eventOrderId) {
+      void refetchConversations();
+      void refetchCounts();
+      return;
+    }
+
+    void refetchConversations();
+    void refetchCounts();
+  }, [sseContext?.lastEvent, viewingConversationId, refetchConversations, refetchCounts]);
 
   const handleMarkReady = async (conversationId: string) => {
     try {
@@ -227,50 +241,6 @@ export default function Home() {
   };
 
 
-  const handleStartTestConversation = async () => {
-    if (!user) return;
-
-    try {
-      setIsTyping(true);
-
-      const startResponse = await fetch('/api/test-conversation/start', {
-        method: 'POST',
-      });
-
-      if (!startResponse.ok) {
-        const error = await startResponse.json().catch(() => ({}));
-        throw new Error(error?.message || 'Failed to start test conversation.');
-      }
-
-      const startData = await startResponse.json();
-      const { orderId } = startData;
-
-      // Refresh order list to include the new conversation
-      await Promise.all([
-        refetchConversations(),
-        refetchCounts(),
-      ]);
-
-      // Automatically focus the new conversation
-      if (orderId) {
-        setViewingConversationId(orderId);
-        setActiveTab('new');
-      }
-      // Refresh again shortly after to capture AI response
-      setTimeout(() => {
-        void Promise.all([
-          refetchConversations(),
-          refetchCounts(),
-        ]);
-      }, 500);
-    } catch (error) {
-      console.error('Error starting test conversation:', error);
-      alert(error instanceof Error ? error.message : 'Failed to start test conversation.');
-    } finally {
-      setIsTyping(false);
-    }
-  };
-
   const handleSelectConversation = (conversationId: string) => {
     setViewingConversationId(conversationId);
   };
@@ -319,7 +289,6 @@ export default function Home() {
             <ConversationView
               conversation={viewingConversation}
               onBack={handleBackFromConversation}
-              onConfirmOrder={handleConfirmOrder}
               onMarkReady={handleMarkReady}
               onUpdateOrder={handleUpdateOrder}
               onSendMessage={handleSendMessage}
@@ -330,14 +299,12 @@ export default function Home() {
               {isLoading ? (
                 <MessageListSkeleton />
               ) : (
-                <MessageList 
-                  conversations={filteredConversations}
+                <MessageList
+                  conversations={conversations}
                   onSelectConversation={handleSelectConversation}
                   onOpenMenu={() => setIsDrawerOpen(true)}
                   onMarkReady={handleMarkReady}
                   onMarkPickedUp={handleMarkPickedUp}
-                  onStartTestConversation={handleStartTestConversation}
-                  isTyping={isTyping}
                 />
               )}
               <TabBar

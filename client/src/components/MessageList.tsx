@@ -1,8 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import type { Conversation } from '@shared/schema';
-import { MessageCircle, Menu, Check, Sparkles } from 'lucide-react';
+import { MessageCircle, Menu, Check } from 'lucide-react';
 import IOSStatusBar from './IOSStatusBar';
 
 interface MessageListProps {
@@ -11,11 +10,9 @@ interface MessageListProps {
   onOpenMenu?: () => void;
   onMarkReady?: (conversationId: string) => void;
   onMarkPickedUp?: (conversationId: string) => void;
-  onStartTestConversation?: () => void;
-  isTyping?: boolean;
 }
 
-export default function MessageList({ conversations, onSelectConversation, onOpenMenu, onMarkReady, onMarkPickedUp, onStartTestConversation, isTyping }: MessageListProps) {
+export default function MessageList({ conversations, onSelectConversation, onOpenMenu, onMarkReady, onMarkPickedUp }: MessageListProps) {
   const getLastMessage = (conversation: Conversation) => {
     if (conversation.messages.length === 0) return '';
     return conversation.messages[conversation.messages.length - 1].text;
@@ -104,32 +101,11 @@ export default function MessageList({ conversations, onSelectConversation, onOpe
         >
           <Menu className="w-6 h-6 text-primary" />
         </Button>
-        <div className="h-8 bg-primary px-3 py-1 rounded flex items-center flex-1 min-w-0">
+        <div className="h-8 bg-primary px-3 py-1 rounded flex items-center">
           <span className="text-primary-foreground font-bold text-lg whitespace-nowrap" data-testid="text-logo">
             CORN ON THE CORNER
           </span>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onStartTestConversation}
-          disabled={isTyping}
-          data-testid="button-start-test"
-          className="flex-shrink-0 border-primary text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
-        >
-          {isTyping ? (
-            <>
-              <span className="inline-block animate-pulse">●</span>
-              <span className="inline-block animate-pulse ml-1" style={{ animationDelay: '0.2s' }}>●</span>
-              <span className="inline-block animate-pulse ml-1" style={{ animationDelay: '0.4s' }}>●</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4 mr-1" />
-              Test
-            </>
-          )}
-        </Button>
       </div>
       
       <div className="px-4 py-2">

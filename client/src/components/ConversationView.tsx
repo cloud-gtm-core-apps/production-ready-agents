@@ -20,7 +20,6 @@ interface ConversationViewProps {
   conversation: Conversation;
   detectedPickupTime?: string;
   onBack?: () => void;
-  onConfirmOrder?: (conversationId: string) => void;
   onMarkReady?: (conversationId: string) => void;
   onUpdateOrder?: (conversationId: string, orderDetails: OrderDetails) => void;
   onSendMessage?: (conversationId: string, messageText: string) => Promise<void> | void;
@@ -31,7 +30,6 @@ export default function ConversationView({
   conversation,
   detectedPickupTime,
   onBack,
-  onConfirmOrder,
   onMarkReady,
   onUpdateOrder,
   onSendMessage,
@@ -234,7 +232,6 @@ export default function ConversationView({
 
   const handleConfirmOrder = () => {
     setAutoStartEditing(true);
-    onConfirmOrder?.(conversation.id);
   };
 
   const handleSaveOrder = (updatedDetails: OrderDetails) => {
@@ -368,7 +365,7 @@ export default function ConversationView({
             pickupTimeFromAI={aiPickupTime}
           />
 
-          {conversation.orderStatus === 'new' && onConfirmOrder && onDeleteOrder && (
+          {conversation.orderStatus === 'new' && onDeleteOrder && (
             <div className="flex gap-2 mt-3">
               <Button
                 variant="destructive"
@@ -389,7 +386,7 @@ export default function ConversationView({
             </div>
           )}
 
-          {conversation.orderStatus === 'new' && onConfirmOrder && !onDeleteOrder && (
+          {conversation.orderStatus === 'new' && !onDeleteOrder && (
             <Button
               className="w-full mt-3"
               onClick={handleConfirmOrder}

@@ -1,3 +1,5 @@
+import type { Response } from "express";
+
 // Store conversation contexts for AI conversations
 export const aiConversationContexts = new Map<
     string,
@@ -14,3 +16,5 @@ export interface MenuItemCache {
 }
 
 export const menuItemsCache = new Map<string, MenuItemCache>();
+
+export const sseClients = new Map<string, Set<Response>>();
