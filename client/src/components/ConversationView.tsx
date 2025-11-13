@@ -41,7 +41,6 @@ export default function ConversationView({
   const [aiNotes, setAiNotes] = useState<string | undefined>(conversation.orderDetails?.notes ?? undefined);
   const [aiPickupTime, setAiPickupTime] = useState<string | undefined>(conversation.orderDetails?.pickupTime ?? undefined);
   const [autoStartEditing, setAutoStartEditing] = useState(false);
-  const [isFetchingInsights, setIsFetchingInsights] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
 
@@ -143,7 +142,6 @@ export default function ConversationView({
 
     const refreshInsights = async () => {
       try {
-        setIsFetchingInsights(true);
         const summaryRes = await fetch(`/api/orders/${conversation.id}/ai-order-summary`);
 
         if (!cancelled && summaryRes.ok) {
@@ -165,10 +163,6 @@ export default function ConversationView({
         }
       } catch (error) {
         console.error('[ConversationView] Failed to refresh AI insights:', error);
-      } finally {
-        if (!cancelled) {
-          setIsFetchingInsights(false);
-        }
       }
     };
 
@@ -341,9 +335,6 @@ export default function ConversationView({
             })}
           />
         ))}
-        {isFetchingInsights && (
-          <div className="text-xs text-muted-foreground px-2">Updating AI insights…</div>
-        )}
         <div ref={messagesEndRef} />
       </div>
 

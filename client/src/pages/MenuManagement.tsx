@@ -33,6 +33,7 @@ export default function MenuManagement() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [formData, setFormData] = useState({ name: '', price: '', category: '' });
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Fetch menu items from API
   const { data: menuItems = [], isLoading } = useQuery<MenuItem[]>({
@@ -123,6 +124,7 @@ export default function MenuManagement() {
   };
 
   const handleSyncClover = async () => {
+    setIsSyncing(true);
     try {
       const response = await fetch('/api/integrations/clover/sync-menu', {
         method: 'POST',
@@ -132,15 +134,15 @@ export default function MenuManagement() {
       if (!response.ok) {
         const error = await response.json();
         let errorMessage = error.message || 'Failed to sync menu items from Clover. Please try again.';
-        
+
         // If reconnection is required, provide helpful message
         if (error.requiresReconnect) {
           errorMessage += '\n\nPlease go to Settings and reconnect your Clover account.';
         }
-        
+
         const errorDetails = error.details ? `\n\nDetails: ${error.details}` : '';
         const statusCode = error.statusCode ? `\n\nStatus Code: ${error.statusCode}` : '';
-        alert(`${errorMessage}${statusCode}${errorDetails}`);
+        console.error(`[MenuManagement] Clover sync failed:${statusCode}${errorDetails}`, errorMessage);
         return;
       }
 
@@ -148,16 +150,16 @@ export default function MenuManagement() {
       
       // Invalidate menu items query to refresh the list
       queryClient.invalidateQueries({ queryKey: ['/api/menu-items'] });
-      
-      // Show success message
+
       if (result.errors && result.errors.length > 0) {
-        alert(`Synced ${result.synced} items from Clover. Some errors occurred:\n${result.errors.join('\n')}`);
+        console.warn('[MenuManagement] Clover sync completed with errors:', result.errors);
       } else {
-        alert(`Successfully synced ${result.synced} menu items from Clover!`);
+        console.info('[MenuManagement] Clover sync completed successfully.');
       }
     } catch (error) {
       console.error('Error syncing menu items from Clover:', error);
-      alert('Failed to sync menu items from Clover. Please try again.');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -261,13 +263,14 @@ export default function MenuManagement() {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-foreground">Menu Items</h2>
                   {cloverConnected && (
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={handleSyncClover}
                       data-testid="button-sync-clover"
+                      disabled={isSyncing}
                     >
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Sync from Clover
+                      <RefreshCw className={`h-4 w-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
+                      {isSyncing ? 'Syncing...' : 'Sync from Clover'}
                     </Button>
                   )}
                 </div>

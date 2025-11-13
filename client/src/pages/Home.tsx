@@ -71,11 +71,34 @@ export default function Home() {
       return;
     }
 
-    const payload = (sseContext.lastEvent.data ?? {}) as { orderId?: string };
+    const payload = (sseContext.lastEvent.data ?? {}) as {
+      orderId?: string;
+      aiSuggestedResponse?: string | null;
+    };
     const eventOrderId = typeof payload.orderId === 'string' ? payload.orderId : undefined;
 
     if (!eventOrderId) {
       return;
+    }
+
+    if ('aiSuggestedResponse' in payload) {
+      queryClient.setQueryData<Conversation[] | undefined>(['/api/orders', activeTab], (previous) => {
+        if (!previous) {
+          return previous;
+        }
+
+        return previous.map((conversation) =>
+          conversation.id === eventOrderId
+            ? {
+                ...conversation,
+                aiSuggestedResponse:
+                  typeof payload.aiSuggestedResponse === 'string' && payload.aiSuggestedResponse.trim()
+                    ? payload.aiSuggestedResponse
+                    : undefined,
+              }
+            : conversation
+        );
+      });
     }
 
     if (!viewingConversationId || viewingConversationId !== eventOrderId) {

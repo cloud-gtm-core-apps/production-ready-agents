@@ -45,7 +45,6 @@ export default function AITestSimulator() {
   const [isSending, setIsSending] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [orderSummary, setOrderSummary] = useState<string | null>(null);
-  const [isFetchingInsights, setIsFetchingInsights] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = (instant = false) => {
@@ -57,7 +56,6 @@ export default function AITestSimulator() {
   }, [messages]);
 
   const refreshAIInsights = async (currentOrderId: string) => {
-    setIsFetchingInsights(true);
     try {
       const [summaryRes, suggestionRes] = await Promise.all([
         fetch(`/api/orders/${currentOrderId}/ai-order-summary`),
@@ -81,8 +79,6 @@ export default function AITestSimulator() {
       console.error('Error refreshing AI insights:', error);
       setOrderSummary(null);
       setAiSuggestion(null);
-    } finally {
-      setIsFetchingInsights(false);
     }
   };
 
@@ -193,7 +189,6 @@ export default function AITestSimulator() {
     setAiSuggestion(null);
     setOrderSummary(null);
     setInputMessage('');
-    setIsFetchingInsights(false);
   };
 
   if (isLoading) {
@@ -253,7 +248,6 @@ export default function AITestSimulator() {
                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-zinc-400">AI Order Summary</span>
-                    {isFetchingInsights && <span className="text-xs text-zinc-500">Updating…</span>}
                   </div>
                   <div className="text-sm text-white whitespace-pre-line min-h-[3rem]">
                     {orderSummary ?? 'No order summary yet.'}
@@ -263,7 +257,6 @@ export default function AITestSimulator() {
                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-zinc-400">AI Suggested Reply</span>
-                    {isFetchingInsights && <span className="text-xs text-zinc-500">Updating…</span>}
                   </div>
                   <div className="text-sm text-white min-h-[2.5rem]">
                     {aiSuggestion ?? 'No suggestion yet.'}

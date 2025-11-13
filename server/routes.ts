@@ -11,9 +11,55 @@ import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@share
 import { isAuthenticated } from "./utils";
 import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder } from "./utils";
 import { openai } from "./clients";
-import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients } from "./globals";
+import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals";
 import { analyzeOrderFromConversation, generateAISuggestedResponse } from "./aiFunctions";
 const MESSAGING_SERVICE_URL = "https://voltametric-unrudely-carlotta.ngrok-free.dev/send";
+
+async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
+  const trimmed = typeof message === "string" ? message.trim() : "";
+
+  if (!trimmed) {
+    throw Object.assign(new Error("Message is empty"), { reason: "empty-message" });
+  }
+
+  try {
+    const response = await fetch(MESSAGING_SERVICE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        to,
+        message: trimmed,
+      }),
+    });
+
+    if (!response.ok) {
+      let errorBody: string | undefined;
+      try {
+        errorBody = await response.text();
+      } catch (readError) {
+        console.error("[Messaging Service] Failed to read error response body", readError);
+      }
+
+      const error = Object.assign(
+        new Error("Messaging service returned a non-OK response"),
+        {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorBody,
+        }
+      );
+
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof Error && !("status" in error)) {
+      console.error("[Messaging Service] Error sending message", error);
+    }
+    throw error;
+  }
+}
 
 const INITIAL_TEST_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
 
@@ -647,7 +693,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               pickupTimestamp: order.pickupTime ? new Date(order.pickupTime).getTime() : null, // Keep as timestamp number
               total: order.orderPrice,
               notes: order.notes || ''
-            } : undefined
+            } : undefined,
+            aiSuggestedResponse: aiSuggestedResponses.get(order.id) ?? undefined,
           };
         })
       );
@@ -698,6 +745,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.updateOrderLastMessage(orderId, new Date());
 
         console.log(`[Send to Preparation] Confirmation message prepared for order ${orderId}`);
+
+        try {
+          if (order.number) {
+            await sendMessageThroughRelay(order.number, confirmationMessage.text);
+            console.log(`[Send to Preparation] Sent confirmation message via messaging service to ${order.number}`);
+          } else {
+            console.warn(`[Send to Preparation] Order ${orderId} is missing a contact number; skipping messaging service send.`);
+          }
+        } catch (error) {
+          console.error('[Send to Preparation] Failed to deliver confirmation message via messaging service', {
+            error,
+            orderId,
+            number: order.number,
+          });
+        }
       } catch (error) {
         console.error('[Send to Preparation] Error sending confirmation message:', error);
         // Don't fail the request if message sending fails
@@ -743,6 +805,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.updateOrderLastMessage(orderId, new Date());
 
         console.log(`[Mark Ready] Ready message prepared for order ${orderId}`);
+
+        try {
+          if (order.number) {
+            await sendMessageThroughRelay(order.number, readyMessage.text);
+            console.log(`[Mark Ready] Sent ready message via messaging service to ${order.number}`);
+          } else {
+            console.warn(`[Mark Ready] Order ${orderId} is missing a contact number; skipping messaging service send.`);
+          }
+        } catch (error) {
+          console.error('[Mark Ready] Failed to deliver ready message via messaging service', {
+            error,
+            orderId,
+            number: order.number,
+          });
+        }
       } catch (error) {
         console.error('[Mark Ready] Error sending ready message:', error);
         // Don't fail the request if message sending fails
@@ -824,6 +901,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate AI suggested response and return it to the client
       const suggestedResponse = await generateAISuggestedResponse(messages, userId, orderId);
 
+      if (suggestedResponse && suggestedResponse.trim()) {
+        aiSuggestedResponses.set(orderId, suggestedResponse.trim());
+      } else {
+        aiSuggestedResponses.delete(orderId);
+      }
+
       // Return in API response - client will display it directly
       res.json({ success: true, suggestion: suggestedResponse });
     } catch (error) {
@@ -858,40 +941,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       try {
-        const response = await fetch(MESSAGING_SERVICE_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            to: order.number,
-            message: trimmedMessage,
-          }),
+        await sendMessageThroughRelay(order.number, trimmedMessage);
+      } catch (error) {
+        console.error("[Messaging Service] Failed to send message", {
+          error,
+          orderId,
+          to: order.number,
         });
 
-        if (!response.ok) {
-          let errorBody: string | undefined;
-          try {
-            errorBody = await response.text();
-          } catch (readError) {
-            console.error(
-              "[Messaging Service] Failed to read error response body",
-              readError
-            );
-          }
-
-          console.error("[Messaging Service] Failed to send message", {
-            status: response.status,
-            statusText: response.statusText,
-            body: errorBody,
-          });
-
+        if (error && typeof error === "object" && "status" in error) {
           return res.status(502).json({ message: "Failed to deliver message via messaging service" });
         }
-      } catch (error) {
-        console.error("[Messaging Service] Error sending message", error);
+
         return res.status(502).json({ message: "Failed to deliver message via messaging service" });
       }
+
+      aiSuggestedResponses.delete(orderId);
 
       // Save Rod's message to the database
       // isOutgoing: false = restaurant messages (Rod's messages)
@@ -908,168 +973,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         orderId,
         message: rodMessage,
         source: 'outgoing',
+        aiSuggestedResponse: null,
       });
-
-      // Ignore SMS sending for now
-      // if (twilioClient) {
-      //   try {
-      //     if (twilioFromNumber) {
-      //       const tm = await twilioClient.messages.create({
-      //         to: order.number,
-      //         from: twilioFromNumber,
-      //         body: message.trim(),
-      //       })
-      //       console.log(`[SMS] Sent outgoing SMS jebroy to ${order.number}: ${tm}`);
-      //     } else {
-      //       console.warn('[Twilio] TWILIO_FROM_NUMBER not configured.');
-      //     }
-      //   } catch (error) {
-      //     console.error('[Twilio] Failed to send outgoing SMS:', error);
-      //   }
-      // } else {
-      //   console.warn('[Twilio] Client not initialised; skipping SMS send.');
-      // }
-
-
 
       // Trigger debounced order detection after Rod's message
       triggerDebouncedOrderDetection(userId, orderId);
-
-      // Generate AI suggested response asynchronously
-      (async () => {
-        try {
-          const conversation = await storage.getOrderConversation(userId, orderId);
-          if (conversation) {
-            const allMessages = (conversation.messages as Message[]) || [];
-            await generateAISuggestedResponse(allMessages, userId, orderId);
-            console.log("AI suggested response generated");
-          }
-        } catch (error) {
-          console.error(`[REST API] Error generating AI suggested response:`, error);
-        }
-      })();
-
-      res.json({ success: true });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/orders/:orderId/message", isAuthenticated, async (req, res, next) => {
-    try {
-      const { orderId } = req.params;
-      const { message } = req.body;
-      const userId = (req.user as any).id;
-
-      const trimmedMessage =
-        typeof message === "string" ? message.trim() : "";
-
-      if (!trimmedMessage) {
-        return res.status(400).json({ message: 'Message is required' });
-      }
-
-      // Get the order to find the phone number
-      const order = await storage.getOrderById(userId, orderId);
-
-      if (!order) {
-        return res.status(404).json({ message: 'Order not found' });
-      }
-
-      if (!order.number) {
-        return res.status(400).json({ message: 'Order does not have a contact number' });
-      }
-
-      try {
-        const response = await fetch(MESSAGING_SERVICE_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            to: order.number,
-            message: trimmedMessage,
-          }),
-        });
-
-        if (!response.ok) {
-          let errorBody: string | undefined;
-          try {
-            errorBody = await response.text();
-          } catch (readError) {
-            console.error(
-              "[Messaging Service] Failed to read error response body",
-              readError
-            );
-          }
-
-          console.error("[Messaging Service] Failed to send message", {
-            status: response.status,
-            statusText: response.statusText,
-            body: errorBody,
-          });
-
-          return res.status(502).json({ message: "Failed to deliver message via messaging service" });
-        }
-      } catch (error) {
-        console.error("[Messaging Service] Error sending message", error);
-        return res.status(502).json({ message: "Failed to deliver message via messaging service" });
-      }
-
-      // Save Rod's message to the database
-      // isOutgoing: false = restaurant messages (Rod's messages)
-      const rodMessage: Message = {
-        id: randomUUID(),
-        text: trimmedMessage,
-        isOutgoing: false,
-        timestamp: new Date().toISOString(),
-      };
-      await storage.addMessageToOrder(userId, orderId, rodMessage);
-      await storage.updateOrderLastMessage(orderId, new Date());
-
-      emitSSE(userId, 'order-message', {
-        orderId,
-        message: rodMessage,
-        source: 'outgoing',
-      });
-
-      // Ignore SMS sending for now
-      // if (twilioClient) {
-      //   try {
-      //     if (twilioFromNumber) {
-      //       const tm = await twilioClient.messages.create({
-      //         to: order.number,
-      //         from: twilioFromNumber,
-      //         body: message.trim(),
-      //       })
-      //       console.log(`[SMS] Sent outgoing SMS jebroy to ${order.number}: ${tm}`);
-      //     } else {
-      //       console.warn('[Twilio] TWILIO_FROM_NUMBER not configured.');
-      //     }
-      //   } catch (error) {
-      //     console.error('[Twilio] Failed to send outgoing SMS:', error);
-      //   }
-      // } else {
-      //   console.warn('[Twilio] Client not initialised; skipping SMS send.');
-      // }
-
-
-
-      // Trigger debounced order detection after Rod's message
-      triggerDebouncedOrderDetection(userId, orderId);
-
-      // Generate AI suggested response asynchronously
-      (async () => {
-        try {
-          const conversation = await storage.getOrderConversation(userId, orderId);
-          if (conversation) {
-            const allMessages = (conversation.messages as Message[]) || [];
-            await generateAISuggestedResponse(allMessages, userId, orderId);
-            console.log("AI suggested response generated");
-          }
-        } catch (error) {
-          console.error(`[REST API] Error generating AI suggested response:`, error);
-        }
-      })();
 
       res.json({ success: true });
     } catch (error) {
@@ -1278,7 +1186,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const allMessages = (conversation.messages as Message[]) || [];
-      const suggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+
+      let suggestion = aiSuggestedResponses.get(orderId) ?? null;
+
+      if (!suggestion) {
+        suggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+
+        if (suggestion && suggestion.trim()) {
+          aiSuggestedResponses.set(orderId, suggestion.trim());
+        } else {
+          aiSuggestedResponses.delete(orderId);
+          suggestion = null;
+        }
+      }
 
       res.json({ suggestion });
     } catch (error) {
@@ -1424,18 +1344,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       triggerDebouncedOrderDetection(userId, orderId);
 
-      (async () => {
-        try {
-          const conversation = await storage.getOrderConversation(userId, orderId);
-          if (conversation) {
-            const allMessages = (conversation.messages as Message[]) || [];
-            await generateAISuggestedResponse(allMessages, userId, orderId);
+      let aiSuggestion: string | null = null;
+      try {
+        const conversation = await storage.getOrderConversation(userId, orderId);
+        if (conversation) {
+          const allMessages = (conversation.messages as Message[]) || [];
+          aiSuggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+
+          if (aiSuggestion && aiSuggestion.trim()) {
+            aiSuggestion = aiSuggestion.trim();
+            aiSuggestedResponses.set(orderId, aiSuggestion);
             console.log('[Twilio] AI suggested response refreshed for incoming SMS');
+          } else {
+            aiSuggestedResponses.delete(orderId);
+            aiSuggestion = null;
           }
-        } catch (error) {
-          console.error('[Twilio] Error refreshing AI suggested response:', error);
+        } else {
+          aiSuggestedResponses.delete(orderId);
         }
-      })();
+      } catch (error) {
+        aiSuggestedResponses.delete(orderId);
+        console.error('[Twilio] Error refreshing AI suggested response:', error);
+      }
 
       emitSSE(userId, 'order-message', {
         orderId,
@@ -1443,6 +1373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         number: incomingNumber,
         source: 'incoming',
         isNewOrder,
+        aiSuggestedResponse: aiSuggestion,
       });
 
       res.status(200).type('text/xml').send('<Response></Response>');

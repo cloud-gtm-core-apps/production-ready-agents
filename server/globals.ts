@@ -18,3 +18,6 @@ export interface MenuItemCache {
 export const menuItemsCache = new Map<string, MenuItemCache>();
 
 export const sseClients = new Map<string, Set<Response>>();
+
+// Cache for latest AI suggested responses per order
+export const aiSuggestedResponses = new Map<string, string>();
