@@ -16,6 +16,89 @@ type OptimisticMessage = {
   timestamp: string;
 };
 
+type AIOrderDetailsPayload = {
+  items?: string[];
+  pickupTime?: string;
+  notes?: string;
+};
+
+const DEFAULT_PICKUP_PLACEHOLDER = 'TBD';
+
+function parsePriceFromItem(item: string | undefined): number {
+  if (!item) {
+    return 0;
+  }
+  const match = item.match(/:\s*\$([\d.,]+)/);
+  if (!match) {
+    return 0;
+  }
+  const numeric = parseFloat(match[1].replace(/,/g, ''));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function derivePickupTimestampFromTime(pickupTime?: string): number {
+  if (!pickupTime) {
+    return Date.now();
+  }
+
+  const trimmed = pickupTime.trim();
+  if (!trimmed) {
+    return Date.now();
+  }
+
+  const match = trimmed.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i);
+  if (!match) {
+    return Date.now();
+  }
+
+  let hours = parseInt(match[1], 10);
+  const minutes = match[2] ? parseInt(match[2], 10) : 0;
+  const period = match[3].toUpperCase();
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    return Date.now();
+  }
+
+  if (period === 'PM' && hours !== 12) {
+    hours += 12;
+  } else if (period === 'AM' && hours === 12) {
+    hours = 0;
+  }
+
+  const candidate = new Date();
+  candidate.setHours(hours, minutes, 0, 0);
+
+  // If the calculated time is more than 3 hours in the past, assume it's for the next day
+  if (candidate.getTime() < Date.now() - 3 * 60 * 60 * 1000) {
+    candidate.setDate(candidate.getDate() + 1);
+  }
+
+  return candidate.getTime();
+}
+
+function createOrderDetailsFromAIDetails(details: AIOrderDetailsPayload): OrderDetails {
+  const normalizedItems = Array.isArray(details.items)
+    ? details.items.map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  const totalValue = normalizedItems.reduce((sum, item) => sum + parsePriceFromItem(item), 0);
+  const pickupTimeText = details.pickupTime?.trim() || DEFAULT_PICKUP_PLACEHOLDER;
+  const pickupTimestamp = derivePickupTimestampFromTime(details.pickupTime);
+
+  const result: OrderDetails = {
+    items: normalizedItems,
+    pickupTime: pickupTimeText,
+    pickupTimestamp,
+    total: totalValue.toFixed(2),
+  };
+
+  if (details.notes && details.notes.trim()) {
+    result.notes = details.notes.trim();
+  }
+
+  return result;
+}
+
 interface ConversationViewProps {
   conversation: Conversation;
   detectedPickupTime?: string;
@@ -41,6 +124,7 @@ export default function ConversationView({
   const [aiNotes, setAiNotes] = useState<string | undefined>(conversation.orderDetails?.notes ?? undefined);
   const [aiPickupTime, setAiPickupTime] = useState<string | undefined>(conversation.orderDetails?.pickupTime ?? undefined);
   const [autoStartEditing, setAutoStartEditing] = useState(false);
+  const [aiOrderDetails, setAiOrderDetails] = useState<OrderDetails | null>(conversation.orderDetails ?? null);
   const [isSending, setIsSending] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
 
@@ -73,6 +157,14 @@ export default function ConversationView({
       setAiPickupTime(conversation.orderDetails.pickupTime);
     }
   }, [conversation.orderDetails?.items, conversation.orderDetails?.notes, conversation.orderDetails?.pickupTime]);
+
+  useEffect(() => {
+    if (conversation.orderDetails) {
+      setAiOrderDetails(conversation.orderDetails);
+    } else {
+      setAiOrderDetails(null);
+    }
+  }, [conversation.id, conversation.orderDetails]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -150,6 +242,7 @@ export default function ConversationView({
             setAiItems(summaryData.details.items ?? undefined);
             setAiNotes(summaryData.details.notes ?? undefined);
             setAiPickupTime(summaryData.details.pickupTime ?? undefined);
+            setAiOrderDetails(createOrderDetailsFromAIDetails(summaryData.details));
           }
         }
 
@@ -231,21 +324,25 @@ export default function ConversationView({
   const handleSaveOrder = (updatedDetails: OrderDetails) => {
     onUpdateOrder?.(conversation.id, updatedDetails);
     setAutoStartEditing(false);
+    setAiOrderDetails(updatedDetails);
   };
 
+  const orderDetailsToDisplay = conversation.orderDetails ?? aiOrderDetails;
+  const normalizedOrderStatus = (conversation.orderStatus ?? 'new') as 'new' | 'confirmed' | 'ready' | 'completed';
+
   const isUrgent = () => {
-    if (conversation.orderStatus === 'new') return false;
-    if (!conversation.orderDetails?.pickupTimestamp) return false;
+    if (normalizedOrderStatus === 'new') return false;
+    if (!orderDetailsToDisplay?.pickupTimestamp) return false;
     const now = Date.now();
-    const timeUntilPickup = conversation.orderDetails.pickupTimestamp - now;
+    const timeUntilPickup = orderDetailsToDisplay.pickupTimestamp - now;
     const minutesUntilPickup = timeUntilPickup / (1000 * 60);
     return minutesUntilPickup > 0 && minutesUntilPickup < 10;
   };
 
   const isRunningLate = () => {
-    if (!conversation.orderDetails?.pickupTimestamp) return false;
-    if (conversation.orderStatus !== 'confirmed') return false;
-    return Date.now() > conversation.orderDetails.pickupTimestamp;
+    if (!orderDetailsToDisplay?.pickupTimestamp) return false;
+    if (normalizedOrderStatus !== 'confirmed') return false;
+    return Date.now() > orderDetailsToDisplay.pickupTimestamp;
   };
 
   const getOrderCountText = () => {
@@ -342,11 +439,11 @@ export default function ConversationView({
         <AISuggestedResponse suggestion={aiSuggestedResponse} onUseSuggestion={handleUseSuggestion} />
       )}
 
-      {conversation.orderDetails && (
+      {orderDetailsToDisplay && (
         <div className="px-4 pb-3 max-h-[60vh] overflow-y-auto">
           <EditableOrderSummary
-            orderDetails={conversation.orderDetails}
-            orderStatus={conversation.orderStatus}
+            orderDetails={orderDetailsToDisplay}
+            orderStatus={normalizedOrderStatus}
             detectedPickupTime={detectedPickupTime}
             onSave={handleSaveOrder}
             autoStartEditing={autoStartEditing}

@@ -12,7 +12,7 @@ import { isAuthenticated } from "./utils";
 import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder } from "./utils";
 import { openai } from "./clients";
 import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals";
-import { analyzeOrderFromConversation, generateAISuggestedResponse } from "./aiFunctions";
+import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions";
 const MESSAGING_SERVICE_URL = "https://voltametric-unrudely-carlotta.ngrok-free.dev/send";
 
 async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
@@ -225,12 +225,28 @@ async function checkForOrderDetection(
         console.log(`[Order Detection] Retrieved ${menuItems.length} menu items for context`);
 
         // Analyze FULL conversation for order (need full context for AI to understand the order)
-        console.log(`[Order Detection] Calling analyzeOrderFromConversation for order ${orderId}...`);
-        const analysis = await analyzeOrderFromConversation(
+        console.log(`[Order Detection] Calling analyzeOrderSummaryFromConversation for order ${orderId}...`);
+        const summaryResult = await analyzeOrderSummaryFromConversation(
           messages,
           order.firstName || undefined,
           menuItems
         );
+
+        const analysis = {
+          orderMade: summaryResult.orderMade,
+          orderDetails: summaryResult.orderDetails ? { ...summaryResult.orderDetails } : undefined,
+        };
+
+        const detectedPickupTime = detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+        if (analysis.orderDetails) {
+          if (!analysis.orderDetails.customerName) {
+            analysis.orderDetails.customerName = order.firstName || order.number || "Customer";
+          }
+
+          if (detectedPickupTime) {
+            analysis.orderDetails.pickupTime = detectedPickupTime;
+          }
+        }
 
         console.log(`[Order Detection] Analysis result for order ${orderId}:`, {
           orderMade: analysis.orderMade,
@@ -1224,18 +1240,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const messages = (conversation.messages as Message[]) || [];
       const menuItems = await getMenuItemsWithCache(userId);
-      const analysis = await analyzeOrderFromConversation(messages, order.firstName || undefined, menuItems);
+      const summaryResult = await analyzeOrderSummaryFromConversation(messages, order.firstName || undefined, menuItems);
+      const pickupTimeFromConversation = detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
 
-      if (!analysis.orderMade || !analysis.orderDetails) {
-        return res.json({ orderMade: false, summary: null, details: analysis.orderDetails ?? null });
+      if (!summaryResult.orderMade || !summaryResult.orderDetails) {
+        return res.json({ orderMade: false, summary: null, details: summaryResult.orderDetails ?? null });
       }
 
-      const summary = formatOrderMessage(analysis.orderDetails, menuItems);
+      const orderDetails = { ...summaryResult.orderDetails };
+      if (!orderDetails.customerName) {
+        orderDetails.customerName = order.firstName || order.number || "Customer";
+      }
+      if (pickupTimeFromConversation) {
+        orderDetails.pickupTime = pickupTimeFromConversation;
+      }
+
+      const summary = formatOrderMessage(orderDetails, menuItems);
 
       res.json({
         orderMade: true,
         summary,
-        details: analysis.orderDetails,
+        details: orderDetails,
       });
     } catch (error) {
       console.error('Error generating AI order summary:', error);

@@ -7,7 +7,7 @@ interface AISuggestedResponseProps {
 
 export default function AISuggestedResponse({ suggestion, onUseSuggestion }: AISuggestedResponseProps) {
   return (
-    <div className="px-4 py-3 animate-in fade-in slide-in-from-bottom-3 duration-500">
+    <div className="px-4 py-3">
       <div className="flex items-start gap-2">
         <div className="flex-shrink-0 mt-0.5">
           <Sparkles className="h-4 w-4 text-purple-400" />
