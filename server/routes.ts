@@ -1303,7 +1303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { From, To, Body } = req.body || {};
 
-      console.log('[Twilio] Incoming SMS', {
+      console.log('[SMS Reply] Incoming SMS', {
         from: From,
         to: To,
         body: Body,
@@ -1334,10 +1334,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const order = existingOrder[0];
         userId = order.userId;
         orderId = order.id;
+
+        // Check if order is from a previous day (older than today)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const orderLastMessage = order.lastMessage ? new Date(order.lastMessage) : null;
+        const isOldOrder = orderLastMessage && orderLastMessage < today;
+
+        // If order is completed OR if it's an old order (from yesterday or earlier), reset it to New status
+        if (order.status === 'Completed' || isOldOrder) {
+          const reason = order.status === 'Completed' ? 'completed' : 'old order from previous day';
+          console.log(`[SMS Reply] Resetting ${reason} order ${orderId} to New status for phone number ${incomingNumber}`);
+
+          await storage.updateOrderStatus(orderId, 'New');
+          await storage.updateOrderMade(orderId, false);
+          await storage.updatePickupTimeDetected(orderId, false);
+
+          // Reset order details to start fresh
+          await storage.updateOrderDetails(orderId, {
+            items: [],
+            orderPrice: '0.00',
+            notes: '',
+          });
+          // Reset pickupTime to null explicitly
+          await db.update(orders)
+            .set({ pickupTime: null })
+            .where(eq(orders.id, orderId));
+        }
       } else {
         const existingUser = await db.select().from(users).limit(1);
         if (!existingUser[0]) {
-          console.error('[Twilio] No user available to attach incoming SMS.');
+          console.error('[SMS Reply] No user available to attach incoming SMS.');
           res.status(500).type('text/xml').send('<Response></Response>');
           return;
         }
@@ -1364,46 +1391,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isNewOrder = true;
       }
 
+      // Save message immediately - this is the critical path
       await storage.addMessageToOrder(userId, orderId, message);
       await storage.updateOrderLastMessage(orderId, new Date());
 
-      triggerDebouncedOrderDetection(userId, orderId);
-
-      let aiSuggestion: string | null = null;
-      try {
-        const conversation = await storage.getOrderConversation(userId, orderId);
-        if (conversation) {
-          const allMessages = (conversation.messages as Message[]) || [];
-          aiSuggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
-
-          if (aiSuggestion && aiSuggestion.trim()) {
-            aiSuggestion = aiSuggestion.trim();
-            aiSuggestedResponses.set(orderId, aiSuggestion);
-            console.log('[Twilio] AI suggested response refreshed for incoming SMS');
-          } else {
-            aiSuggestedResponses.delete(orderId);
-            aiSuggestion = null;
-          }
-        } else {
-          aiSuggestedResponses.delete(orderId);
-        }
-      } catch (error) {
-        aiSuggestedResponses.delete(orderId);
-        console.error('[Twilio] Error refreshing AI suggested response:', error);
-      }
-
+      // Emit SSE event immediately so frontend sees the message right away
       emitSSE(userId, 'order-message', {
         orderId,
         message,
         number: incomingNumber,
         source: 'incoming',
         isNewOrder,
-        aiSuggestedResponse: aiSuggestion,
+        aiSuggestedResponse: null, // Will be updated asynchronously
       });
 
+      // Send response immediately to prevent webhook timeouts and retries
       res.status(200).type('text/xml').send('<Response></Response>');
+
+      // Process everything else asynchronously (fire and forget) to avoid blocking
+      // This ensures messages are never stuck in queue
+      (async () => {
+        try {
+          // Trigger order detection (non-blocking)
+          triggerDebouncedOrderDetection(userId, orderId);
+
+          // Generate AI suggestion asynchronously
+          let aiSuggestion: string | null = null;
+          try {
+            const conversation = await storage.getOrderConversation(userId, orderId);
+            if (conversation) {
+              const allMessages = (conversation.messages as Message[]) || [];
+              aiSuggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+
+              if (aiSuggestion && aiSuggestion.trim()) {
+                aiSuggestion = aiSuggestion.trim();
+                aiSuggestedResponses.set(orderId, aiSuggestion);
+                console.log('[SMS Reply] AI suggested response refreshed for incoming SMS');
+
+                // Emit SSE event again with AI suggestion
+                emitSSE(userId, 'order-message', {
+                  orderId,
+                  message,
+                  number: incomingNumber,
+                  source: 'incoming',
+                  isNewOrder,
+                  aiSuggestedResponse: aiSuggestion,
+                });
+              } else {
+                aiSuggestedResponses.delete(orderId);
+              }
+            } else {
+              aiSuggestedResponses.delete(orderId);
+            }
+          } catch (error) {
+            aiSuggestedResponses.delete(orderId);
+            console.error('[SMS Reply] Error refreshing AI suggested response:', error);
+          }
+        } catch (error) {
+          console.error('[SMS Reply] Error in async processing:', error);
+        }
+      })();
     } catch (error) {
-      console.error('[Twilio] Error handling incoming SMS:', error);
+      console.error('[SMS Reply] Error handling incoming SMS:', error);
       res
         .status(500)
         .type('text/xml')
