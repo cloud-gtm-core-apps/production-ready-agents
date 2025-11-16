@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -14,8 +15,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import { Plus, Minus, X, Edit2, ArrowRight, XCircle, ChevronDown } from 'lucide-react';
-import type { OrderDetails } from '@shared/schema';
+import type { OrderDetails, MenuItem } from '@shared/schema';
 
 interface EditableOrderSummaryProps {
   orderDetails: OrderDetails;
@@ -85,7 +99,15 @@ export default function EditableOrderSummary({
   const [editedPickupTime, setEditedPickupTime] = useState(
     formatPickupTime(detectedPickupTime || orderDetails.pickupTime) || ''
   );
-  const [newItemName, setNewItemName] = useState('');
+  const [comboboxOpen, setComboboxOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
+
+  // Fetch menu items from API
+  const { data: menuItems = [], isLoading: isLoadingMenuItems } = useQuery<MenuItem[]>({
+    queryKey: ['/api/menu-items'],
+    staleTime: 0,
+    gcTime: 0,
+  });
 
   // Keep pickup time in sync when not actively editing
   useEffect(() => {
@@ -178,7 +200,8 @@ export default function EditableOrderSummary({
 
   const cancelEditing = () => {
     setIsEditing(false);
-    setNewItemName('');
+    setComboboxOpen(false);
+    setSearchValue('');
     // Notify parent to reset autoStartEditing so it can be triggered again
     onCancelEditing?.();
   };
@@ -193,11 +216,18 @@ export default function EditableOrderSummary({
     setEditedItems(editedItems.filter((_, i) => i !== index));
   };
 
-  const addNewItem = () => {
-    if (newItemName.trim()) {
-      setEditedItems([...editedItems, { name: newItemName.trim(), quantity: 1, price: 12.99 }]);
-      setNewItemName('');
-    }
+  // Parse price string (e.g., "$12.99") to number
+  const parsePrice = (priceStr: string): number => {
+    const match = priceStr.match(/\$?([\d.]+)/);
+    return match ? parseFloat(match[1]) : 12.99;
+  };
+
+  // Handle menu item selection
+  const handleMenuItemSelect = (menuItem: MenuItem) => {
+    const price = parsePrice(menuItem.price);
+    setEditedItems([...editedItems, { name: menuItem.name, quantity: 1, price }]);
+    setComboboxOpen(false);
+    setSearchValue('');
   };
 
   const calculateTotal = (items: EditableItem[]) => {
@@ -401,23 +431,64 @@ export default function EditableOrderSummary({
           </div>
         ))}
 
-        <div className="flex gap-2">
-          <Input
-            placeholder="Add item name..."
-            value={newItemName}
-            onChange={(e) => setNewItemName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addNewItem()}
-            data-testid="input-new-item"
-          />
-          <Button
-            size="icon"
-            onClick={addNewItem}
-            disabled={!newItemName.trim()}
-            data-testid="button-add-item"
-          >
-            <Plus className="w-4 h-4" />
-          </Button>
-        </div>
+        <Popover open={comboboxOpen} onOpenChange={setComboboxOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              role="combobox"
+              aria-expanded={comboboxOpen}
+              className="w-full justify-between"
+              data-testid="button-menu-search"
+            >
+              <span className="text-muted-foreground">
+                {searchValue || "Search menu items..."}
+              </span>
+              <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+            <Command>
+              <CommandInput
+                placeholder="Search menu items..."
+                value={searchValue}
+                onValueChange={setSearchValue}
+                data-testid="input-menu-search"
+              />
+              <CommandList>
+                <CommandEmpty>
+                  {isLoadingMenuItems ? 'Loading...' : 'No menu items found.'}
+                </CommandEmpty>
+                <CommandGroup>
+                  {menuItems
+                    .filter((item) =>
+                      item.name.toLowerCase().includes(searchValue.toLowerCase())
+                    )
+                    .map((item) => (
+                      <CommandItem
+                        key={item.id}
+                        value={item.name}
+                        onSelect={() => handleMenuItemSelect(item)}
+                        className="flex items-center justify-between"
+                        data-testid={`menu-item-${item.id}`}
+                      >
+                        <div className="flex-1">
+                          <div className="font-medium">{item.name}</div>
+                          {item.category && (
+                            <div className="text-xs text-muted-foreground">
+                              {item.category}
+                            </div>
+                          )}
+                        </div>
+                        <div className="ml-2 font-semibold text-primary">
+                          {item.price}
+                        </div>
+                      </CommandItem>
+                    ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
       </div>
 
       <div className="mb-4">

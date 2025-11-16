@@ -103,7 +103,7 @@ interface ConversationViewProps {
   conversation: Conversation;
   detectedPickupTime?: string;
   onBack?: () => void;
-  onMarkReady?: (conversationId: string) => void;
+  onMarkReady?: (conversationId: string, orderWasUpdated?: boolean) => void;
   onUpdateOrder?: (conversationId: string, orderDetails: OrderDetails) => void;
   onSendMessage?: (conversationId: string, messageText: string) => Promise<void> | void;
   onDeleteOrder?: (conversationId: string) => void;
@@ -127,6 +127,7 @@ export default function ConversationView({
   const [aiOrderDetails, setAiOrderDetails] = useState<OrderDetails | null>(conversation.orderDetails ?? null);
   const [isSending, setIsSending] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
+  const [initialOrderDetails, setInitialOrderDetails] = useState<OrderDetails | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastCustomerMessageIdRef = useRef<string | null>(null);
@@ -136,6 +137,10 @@ export default function ConversationView({
 
   useEffect(() => {
     setAiSuggestedResponse(conversation.aiSuggestedResponse ?? null);
+    // Reset initial order details when conversation changes
+    // It will be set properly in the next useEffect when conversation.orderDetails is available
+    setInitialOrderDetails(null);
+    setAiOrderDetails(null);
   }, [conversation.id]);
 
   useEffect(() => {
@@ -158,13 +163,21 @@ export default function ConversationView({
     }
   }, [conversation.orderDetails?.items, conversation.orderDetails?.notes, conversation.orderDetails?.pickupTime]);
 
+  // Set initial order details and aiOrderDetails when conversation first loads
+  // This runs when conversation.id changes OR when conversation.orderDetails first becomes available
   useEffect(() => {
     if (conversation.orderDetails) {
-      setAiOrderDetails(conversation.orderDetails);
-    } else {
-      setAiOrderDetails(null);
+      // Set initial order details when conversation first opens (only if not already set)
+      setInitialOrderDetails((prev) => {
+        if (!prev) {
+          return { ...conversation.orderDetails! };
+        }
+        return prev; // Keep existing initial order details
+      });
+      // Set aiOrderDetails if we don't have local edits (only if null/undefined)
+      setAiOrderDetails((prev) => prev || conversation.orderDetails);
     }
-  }, [conversation.id, conversation.orderDetails]);
+  }, [conversation.id, conversation.orderDetails]); // Watch both conversation.id and orderDetails
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -324,7 +337,9 @@ export default function ConversationView({
   const handleSaveOrder = (updatedDetails: OrderDetails) => {
     onUpdateOrder?.(conversation.id, updatedDetails);
     setAutoStartEditing(false);
+    // Keep the updated details in aiOrderDetails so comparison works
     setAiOrderDetails(updatedDetails);
+    console.log('[Save Order] Order saved, updated aiOrderDetails:', updatedDetails);
   };
 
   const orderDetailsToDisplay = conversation.orderDetails ?? aiOrderDetails;
@@ -487,7 +502,49 @@ export default function ConversationView({
           {conversation.orderStatus === 'confirmed' && onMarkReady && (
             <Button
               className="w-full mt-3"
-              onClick={() => onMarkReady(conversation.id)}
+              onClick={() => {
+                // Compare current order details with initial order details
+                // Use aiOrderDetails if available (most recent saved state), otherwise use conversation.orderDetails
+                const currentDetails = aiOrderDetails ?? conversation.orderDetails ?? null;
+                
+                console.log('[Mark Ready] Comparison data:', {
+                  hasInitialOrderDetails: !!initialOrderDetails,
+                  hasCurrentDetails: !!currentDetails,
+                  initialOrderDetails,
+                  currentDetails,
+                  aiOrderDetails,
+                  conversationOrderDetails: conversation.orderDetails,
+                });
+                
+                const hasChanged = initialOrderDetails && currentDetails ? (
+                  // Compare items (sort arrays for comparison)
+                  JSON.stringify((initialOrderDetails.items || []).sort()) !== JSON.stringify((currentDetails.items || []).sort()) ||
+                  // Compare notes (handle null/undefined)
+                  (initialOrderDetails.notes || '') !== (currentDetails.notes || '') ||
+                  // Compare pickup time
+                  (initialOrderDetails.pickupTime || '') !== (currentDetails.pickupTime || '') ||
+                  // Compare total
+                  (initialOrderDetails.total || '0.00') !== (currentDetails.total || '0.00')
+                ) : false;
+                
+                console.log('[Mark Ready] Order changed check:', {
+                  hasChanged,
+                  initialItems: initialOrderDetails?.items,
+                  currentItems: currentDetails?.items,
+                  itemsChanged: JSON.stringify((initialOrderDetails?.items || []).sort()) !== JSON.stringify((currentDetails?.items || []).sort()),
+                  initialNotes: initialOrderDetails?.notes,
+                  currentNotes: currentDetails?.notes,
+                  notesChanged: (initialOrderDetails?.notes || '') !== (currentDetails?.notes || ''),
+                  initialPickupTime: initialOrderDetails?.pickupTime,
+                  currentPickupTime: currentDetails?.pickupTime,
+                  pickupTimeChanged: (initialOrderDetails?.pickupTime || '') !== (currentDetails?.pickupTime || ''),
+                  initialTotal: initialOrderDetails?.total,
+                  currentTotal: currentDetails?.total,
+                  totalChanged: (initialOrderDetails?.total || '0.00') !== (currentDetails?.total || '0.00'),
+                });
+                
+                onMarkReady(conversation.id, hasChanged);
+              }}
               data-testid="button-mark-ready"
             >
               Mark Ready for Pickup

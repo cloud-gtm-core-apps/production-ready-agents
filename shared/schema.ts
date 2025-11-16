@@ -55,6 +55,7 @@ export const orders = pgTable("orders", {
   lastMessage: timestamp("last_message"),
   orderMade: boolean("order_made").default(false),
   pickupTimeDetected: boolean("pickup_time_detected").default(false),
+  cloverOrderId: text("clover_order_id"),
 });
 
 // Order conversations table - stores all messages for an order in one row as JSON

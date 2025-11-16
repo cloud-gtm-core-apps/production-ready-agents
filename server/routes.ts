@@ -9,11 +9,11 @@ import { db } from "./db";
 import { eq, and } from "drizzle-orm";
 import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@shared/schema";
 import { isAuthenticated } from "./utils";
-import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder } from "./utils";
+import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils";
 import { openai } from "./clients";
 import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals";
 import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions";
-const MESSAGING_SERVICE_URL = "https://voltametric-unrudely-carlotta.ngrok-free.dev/send";
+const MESSAGING_SERVICE_URL = "https://palladic-paris-cotyledonal.ngrok-free.dev/send";
 
 async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
   const trimmed = typeof message === "string" ? message.trim() : "";
@@ -805,6 +805,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Update order status to Ready
       await storage.updateOrderStatus(orderId, 'Ready');
+
+      // // Get updated order with latest details (including cloverOrderId)
+      // const updatedOrder = await storage.getOrderById(userId, orderId);
+      // if (!updatedOrder) {
+      //   return res.status(404).json({ message: 'Order not found after update' });
+      // }
+
+      // console.log('[Mark Ready] Updated order:', updatedOrder);
+
+      // // Build orderDetails from the current order
+      // const orderDetails = {
+      //   items: updatedOrder.items || [],
+      //   notes: updatedOrder.notes || null,
+      //   pickupTime: updatedOrder.pickupTime || undefined,
+      //   total: updatedOrder.orderPrice || undefined,
+      // };
+      // await updateCloverOrder(storage, userId, updatedOrder, orderDetails);
 
       // Send ready for pickup message to customer
       try {

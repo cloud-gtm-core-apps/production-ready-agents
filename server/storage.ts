@@ -29,7 +29,7 @@ export interface IStorage {
   updateMenuItem(userId: string, itemId: string, item: Partial<InsertMenuItem>): Promise<MenuItem>;
   deleteMenuItem(userId: string, itemId: string): Promise<void>;
   updateOrderStatus(orderId: string, status: 'New' | 'Confirmed' | 'Ready' | 'Completed'): Promise<void>;
-  updateOrderDetails(orderId: string, updates: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date }): Promise<void>;
+  updateOrderDetails(orderId: string, updates: { orderPrice?: string; items?: string[]; notes?: string; pickupTime?: Date; cloverOrderId?: string }): Promise<void>;
   getCustomerByPhoneNumber(userId: string, phoneNumber: string): Promise<Customer | undefined>;
   createCustomer(userId: string, customer: InsertCustomer): Promise<Customer>;
   getCustomerStats(customerId: string): Promise<CustomerStats | undefined>;

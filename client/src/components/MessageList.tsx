@@ -8,7 +8,7 @@ interface MessageListProps {
   conversations: Conversation[];
   onSelectConversation: (conversationId: string) => void;
   onOpenMenu?: () => void;
-  onMarkReady?: (conversationId: string) => void;
+  onMarkReady?: (conversationId: string, orderWasUpdated?: boolean) => void;
   onMarkPickedUp?: (conversationId: string) => void;
 }
 
@@ -211,7 +211,7 @@ export default function MessageList({ conversations, onSelectConversation, onOpe
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
-                            onMarkReady(conversation.id);
+                            onMarkReady(conversation.id, false); // Order not updated from list view
                           }}
                           className="flex-shrink-0 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-md"
                           data-testid={`button-mark-ready-${conversation.id}`}

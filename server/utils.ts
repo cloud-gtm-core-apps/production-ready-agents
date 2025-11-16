@@ -588,6 +588,167 @@ export async function updateOrderFromDetails(
     }
 }
 
+export async function updateCloverOrder(
+    storage: IStorage,
+    userId: string,
+    order: any,
+    orderDetails?: any
+) {
+    try {
+        // Check if order has a Clover order ID
+        if (!order.cloverOrderId) {
+            console.log('[Clover] Order does not have a Clover order ID, skipping update');
+            return;
+        }
+
+        // Fetch Clover token record
+        const tokenRecord = await db.select()
+            .from(oauthTokens)
+            .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
+            .limit(1);
+
+        if (!tokenRecord[0]) {
+            console.log('[Clover] No Clover token found, skipping update');
+            return;
+        }
+
+        // Decrypt or use fallback access token
+        const accessToken = process.env.MERCHENT_API_KEY || "";
+        const merchantId = tokenRecord[0].merchantId || 'H4RW04034BGH1';
+        const cloverOrderId = order.cloverOrderId;
+
+        console.log(`[Clover] Update - Using Clover order ID: ${cloverOrderId} for order ${order.id}`);
+
+        // Fetch menu items for price matching
+        const menuItems = await storage.getMenuItems(userId);
+
+        // Parse order items into line items
+        const lineItems: Array<{ name?: string; price?: number; unitQty?: number }> = [];
+        const orderItems = orderDetails?.items || order.items || [];
+
+        if (orderItems.length === 0) {
+            console.log('[Clover] Skipping Clover order update - no items in order');
+            return;
+        }
+
+        for (const itemStr of orderItems) {
+            const quantityMatch = itemStr.match(/^(\d+)x\s*(.+)$/i);
+            const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
+            const itemNameWithPrice = quantityMatch ? quantityMatch[2] : itemStr;
+
+            const priceMatch = itemNameWithPrice.match(/:\s*\$([\d.]+)/);
+            const totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+            const itemName = itemNameWithPrice.replace(/:\s*\$[\d.]+.*$/, '').trim();
+
+            let unitPrice: number;
+            if (totalPrice !== null) {
+                unitPrice = totalPrice / quantity;
+            } else {
+                const matchingMenuItem = menuItems.find(mi =>
+                    mi.name.toLowerCase() === itemName.toLowerCase() ||
+                    itemName.toLowerCase().includes(mi.name.toLowerCase())
+                );
+                unitPrice = matchingMenuItem ? parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, '')) : 9.99;
+            }
+
+            for (let i = 0; i < quantity; i++) {
+                const lineItem: any = { name: itemName, price: Math.round(unitPrice * 100) };
+                if (lineItem.price > 0) lineItems.push(lineItem);
+                else console.warn(`[Clover] Skipping invalid price line item: ${itemName} (${lineItem.price})`);
+            }
+        }
+
+        if (lineItems.length === 0) {
+            console.log('[Clover] Skipping Clover order update - no valid line items parsed');
+            return;
+        }
+
+        let clientCreatedTime = Date.now();
+        const pickupTime = orderDetails?.pickupTime || order.pickupTime;
+        if (pickupTime) {
+            const parsedPickupTime = parsePickupTime(pickupTime);
+            if (parsedPickupTime) {
+                clientCreatedTime = parsedPickupTime.getTime();
+            }
+        }
+
+        // Build update payload
+        const updatePayload: any = {
+            orderCart: { lineItems, clientCreatedTime },
+        };
+
+        if (order.firstName || order.lastName) {
+            updatePayload.title = `Order from ${order.firstName || ''} ${order.lastName || ''}`.trim();
+        }
+
+        if (orderDetails?.notes || order.notes) {
+            updatePayload.note = orderDetails?.notes || order.notes;
+        }
+
+        // Update order in Clover
+        // Note: Clover atomic orders may not support updates via standard REST endpoints
+        // Try different methods and endpoints
+        console.log(`[Clover] Attempting to update Clover order ${cloverOrderId} for merchant ${merchantId}`);
+        console.log(`[Clover] Update payload:`, JSON.stringify(updatePayload, null, 2));
+
+        let cloverResponse: Response | null = null;
+        let lastError: string = '';
+
+        // Try 1: PATCH on regular orders endpoint
+        try {
+            cloverResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/orders/${cloverOrderId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(updatePayload),
+            });
+
+            if (cloverResponse.ok) {
+                const cloverOrder = await cloverResponse.json();
+                console.log(`[Clover] ✓ Successfully updated order ${cloverOrderId} in Clover using PATCH`);
+                return;
+            }
+            lastError = await cloverResponse.text();
+            console.log(`[Clover] PATCH failed (${cloverResponse.status}): ${lastError}`);
+        } catch (error) {
+            console.log(`[Clover] PATCH request failed:`, error);
+        }
+
+        // Try 2: PUT on regular orders endpoint
+        if (!cloverResponse?.ok) {
+            try {
+                cloverResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/orders/${cloverOrderId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(updatePayload),
+                });
+
+                if (cloverResponse.ok) {
+                    const cloverOrder = await cloverResponse.json();
+                    console.log(`[Clover] ✓ Successfully updated order ${cloverOrderId} in Clover using PUT`);
+                    return;
+                }
+                lastError = await cloverResponse.text();
+                console.log(`[Clover] PUT failed (${cloverResponse.status}): ${lastError}`);
+            } catch (error) {
+                console.log(`[Clover] PUT request failed:`, error);
+            }
+        }
+
+        // If all methods fail, log warning but don't throw error
+        // Atomic orders created via atomic_order API may not be updatable via standard REST endpoints
+        console.warn(`[Clover] Unable to update order ${cloverOrderId} in Clover. This may be expected if the order was created via atomic_order API. Last error: ${lastError}`);
+        console.warn(`[Clover] The order exists in Clover with ID ${cloverOrderId}, but updates may need to be done manually in the Clover POS system.`);
+    } catch (error) {
+        console.error('[Clover] Error updating order in Clover:', error);
+    }
+}
+
 export async function createCloverOrder(
     storage: IStorage,
     userId: string,
@@ -651,9 +812,11 @@ export async function createCloverOrder(
             return;
         }
 
+        let clientCreatedTime = Date.now();
+
         // Build atomic order payload
         const atomicOrderPayload: any = {
-            orderCart: { lineItems },
+            orderCart: { lineItems, clientCreatedTime },
         };
 
         if (order.firstName || order.lastName) {
@@ -678,6 +841,12 @@ export async function createCloverOrder(
         if (cloverResponse.ok) {
             const cloverOrder = await cloverResponse.json();
             console.log(`[Clover] ✓ Successfully created order ${cloverOrder.id} in Clover`);
+
+            // Save Clover order ID to the order record
+            if (cloverOrder.id) {
+                await storage.updateOrderDetails(order.id, { cloverOrderId: cloverOrder.id });
+                console.log(`[Clover] Saved Clover order ID ${cloverOrder.id} to order ${order.id}`);
+            }
         } else {
             const errorText = await cloverResponse.text();
             console.error(`[Clover] Failed to create order in Clover (${cloverResponse.status}):`, errorText);

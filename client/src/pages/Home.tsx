@@ -111,10 +111,15 @@ export default function Home() {
     void refetchCounts();
   }, [sseContext?.lastEvent, viewingConversationId, refetchConversations, refetchCounts]);
 
-  const handleMarkReady = async (conversationId: string) => {
+  const handleMarkReady = async (conversationId: string, orderWasUpdated: boolean = false) => {
     try {
+      const requestBody = { orderWasUpdated };
+      console.log('[Frontend] Sending mark-ready request:', { conversationId, orderWasUpdated, requestBody });
+      
       const response = await fetch(`/api/orders/${conversationId}/mark-ready`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
       });
 
       if (response.ok) {
