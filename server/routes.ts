@@ -825,10 +825,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Send ready for pickup message to customer
       try {
+        // Format pickup time if available
+        let messageText = 'Your order is ready for pickup';
+        if (order.pickupTime) {
+          const pickupDate = new Date(order.pickupTime);
+          const hours = pickupDate.getHours();
+          const minutes = pickupDate.getMinutes();
+          const ampm = hours >= 12 ? 'PM' : 'AM';
+          const hours12 = hours % 12 || 12;
+          const formattedTime = `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+          messageText = `Your order is ready for pickup at ${formattedTime}`;
+        }
+
         const readyMessageId = randomUUID();
         const readyMessage: Message = {
           id: readyMessageId,
-          text: 'Your order is ready for pickup',
+          text: messageText,
           isOutgoing: false, // false = from business (appears on right side)
           timestamp: new Date().toISOString(),
         };
