@@ -13,7 +13,7 @@ import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRa
 import { openai } from "./clients";
 import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals";
 import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions";
-const MESSAGING_SERVICE_URL = "https://palladic-paris-cotyledonal.ngrok-free.dev/send";
+const MESSAGING_SERVICE_URL = "https://macgateway.ngrok.app/send";
 
 async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
   const trimmed = typeof message === "string" ? message.trim() : "";
@@ -746,12 +746,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // 5. Create order in Clover (if Clover is connected)
       await createCloverOrder(storage, userId, order, orderDetails);
 
+      let formattedTime = 'a later time today';
+
+      if (order.pickupTime) {
+        const pickupTime = new Date(order.pickupTime);
+        const hours = pickupTime.getHours();
+        const minutes = pickupTime.getMinutes();
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        const hours12 = hours % 12 || 12;
+        formattedTime = `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      }
+
       // 6. Send confirmation message to customer
       try {
         const confirmationMessageId = randomUUID();
         const confirmationMessage: Message = {
           id: confirmationMessageId,
-          text: 'Your order has been confirmed',
+          text: `Thanks for ordering! Your order is confirmed and will be ready for pickup at ${formattedTime}.`,
           isOutgoing: false, // false = from business (appears on right side)
           timestamp: new Date().toISOString(),
         };
@@ -826,16 +837,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Send ready for pickup message to customer
       try {
         // Format pickup time if available
-        let messageText = 'Your order is ready for pickup';
-        if (order.pickupTime) {
-          const pickupDate = new Date(order.pickupTime);
-          const hours = pickupDate.getHours();
-          const minutes = pickupDate.getMinutes();
-          const ampm = hours >= 12 ? 'PM' : 'AM';
-          const hours12 = hours % 12 || 12;
-          const formattedTime = `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-          messageText = `Your order is ready for pickup at ${formattedTime}`;
-        }
+        let messageText = 'Your order is all set! Come by anytime to pick it up.';
 
         const readyMessageId = randomUUID();
         const readyMessage: Message = {
@@ -1026,196 +1028,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error) {
-      next(error);
-    }
-  });
-
-  // AI Test Conversation routes
-
-  // Start a new test conversation
-  app.post("/api/test-conversation/start", isAuthenticated, async (req, res, next) => {
-    try {
-      const userId = (req.user as any).id;
-
-      // Create randomized customer profile
-      const { firstName, lastName } = generateRandomName();
-      const phoneNumber = generateRandomPhoneNumber();
-
-      // Create an empty order shell for the simulated conversation
-      const newOrder = await storage.createOrder({
-        userId,
-        firstName,
-        lastName,
-        number: phoneNumber,
-        firstMessage: INITIAL_TEST_GREETING,
-        status: 'New',
-        lastMessage: new Date(),
-        pickupTime: null,
-        items: [],
-        orderPrice: '0.00',
-        notes: '',
-        orderMade: false,
-        pickupTimeDetected: false,
-      });
-
-      // Seed the conversation with the initial greeting from Rod
-      const initialGreeting: Message = {
-        id: randomUUID(),
-        text: INITIAL_TEST_GREETING,
-        isOutgoing: false,
-        timestamp: new Date().toISOString(),
-      };
-
-      await storage.createOrderConversation({
-        userId,
-        orderId: newOrder.id,
-        number: phoneNumber,
-        messages: [initialGreeting],
-        updatedAt: new Date(),
-      });
-
-      const systemPrompt = `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${firstName} ${lastName}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`;
-
-      const context: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `Rod (restaurant manager) says: ${INITIAL_TEST_GREETING}`,
-        },
-      ];
-
-      // Generate the AI customer's response
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: context,
-        temperature: 0.9,
-        max_tokens: 150,
-      });
-
-      const rawResponse = completion.choices[0].message.content || "Thanks!";
-      const aiResponse = rawResponse.trim() || "Thanks!";
-
-      context.push({
-        role: 'assistant' as const,
-        content: aiResponse,
-      });
-
-      aiConversationContexts.set(newOrder.id, context);
-
-      const aiMessage: Message = {
-        id: randomUUID(),
-        text: aiResponse,
-        isOutgoing: true,
-        timestamp: new Date().toISOString(),
-      };
-
-      await storage.addMessageToOrder(userId, newOrder.id, aiMessage);
-      await storage.updateOrderLastMessage(newOrder.id, new Date());
-
-      triggerDebouncedOrderDetection(userId, newOrder.id);
-
-      const conversation = await storage.getOrderConversation(userId, newOrder.id);
-      const messages = (conversation?.messages as Message[]) || [initialGreeting, aiMessage];
-
-      res.json({
-        success: true,
-        orderId: newOrder.id,
-        phoneNumber,
-        customerName: `${firstName} ${lastName}`,
-        messages,
-        aiMessage,
-        aiResponded: true,
-      });
-    } catch (error) {
-      console.error('Error starting test conversation:', error);
-      next(error);
-    }
-  });
-
-  // Send message to AI and get response
-  app.post("/api/test-conversation/message", isAuthenticated, async (req, res, next) => {
-    try {
-      const { orderId, message } = req.body;
-      const userId = (req.user as any).id;
-
-      if (!orderId || !message || !message.trim()) {
-        return res.status(400).json({ message: 'Missing orderId or message text' });
-      }
-
-      const order = await storage.getOrderById(userId, orderId);
-      if (!order) {
-        return res.status(404).json({ message: 'Order not found' });
-      }
-
-      // Persist Rod's message to the conversation
-      const rodMessage: Message = {
-        id: randomUUID(),
-        text: message.trim(),
-        isOutgoing: false,
-        timestamp: new Date().toISOString(),
-      };
-      await storage.addMessageToOrder(userId, orderId, rodMessage);
-      await storage.updateOrderLastMessage(orderId, new Date());
-
-      // Prepare or restore the AI context for this conversation
-      let context = aiConversationContexts.get(orderId);
-      if (!context) {
-        const fallbackPrompt = `You are a customer texting a street food vendor called "Corn on the Corner" in Dearborn, Michigan. Your name is ${order.firstName || 'Alex'} ${order.lastName || 'Taylor'}. You're hungry and want to order corn-based menu items. Be casual, friendly, and realistic. Menu items include: Classic Elote Cup, Buffalo Ranch Elote, Flamin Hot Cheetos Elote, Bacon Cheddar Elote, Nacho Cheese Elote, Corn Ribs, Street Corn Dog, Churro Bites, Tajin Fries. Keep responses under 150 characters. Sound like a real person texting.`;
-        context = [{ role: 'system' as const, content: fallbackPrompt }];
-        aiConversationContexts.set(orderId, context);
-      }
-
-      context.push({
-        role: 'user',
-        content: `Rod (restaurant manager) says: ${message.trim()}`
-      });
-
-      // Generate the AI customer's response
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: context,
-        temperature: 0.9,
-        max_tokens: 150,
-      });
-
-      const rawResponse = completion.choices[0].message.content || "Thanks!";
-      const aiResponse = rawResponse.trim() || "Thanks!";
-
-      context.push({
-        role: 'assistant',
-        content: aiResponse,
-      });
-
-      // Persist the AI customer's reply
-      const aiMessage: Message = {
-        id: randomUUID(),
-        text: aiResponse,
-        isOutgoing: true,
-        timestamp: new Date().toISOString(),
-      };
-      await storage.addMessageToOrder(userId, orderId, aiMessage);
-      await storage.updateOrderLastMessage(orderId, new Date());
-
-      // Trigger downstream automation
-      triggerDebouncedOrderDetection(userId, orderId);
-
-      const conversation = await storage.getOrderConversation(userId, orderId);
-      const messages = (conversation?.messages as Message[]) || [];
-
-      res.json({
-        success: true,
-        aiMessage: {
-          id: aiMessage.id,
-          text: aiMessage.text,
-          isOutgoing: aiMessage.isOutgoing,
-          timestamp: aiMessage.timestamp,
-          isAIOrganized: (aiMessage as any).isAIOrganized || false,
-        },
-        messages,
-        aiResponded: true,
-      });
-    } catch (error) {
-      console.error('Error handling test conversation message:', error);
       next(error);
     }
   });

@@ -632,7 +632,7 @@ export async function updateCloverOrder(
         }
 
         for (const itemStr of orderItems) {
-            const quantityMatch = itemStr.match(/^(\d+)x\s*(.+)$/i);
+            const quantityMatch = itemStr.match(/x(\d+)$/i);
             const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
             const itemNameWithPrice = quantityMatch ? quantityMatch[2] : itemStr;
 
@@ -651,11 +651,10 @@ export async function updateCloverOrder(
                 unitPrice = matchingMenuItem ? parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, '')) : 9.99;
             }
 
-            for (let i = 0; i < quantity; i++) {
-                const lineItem: any = { name: itemName, price: Math.round(unitPrice * 100) };
-                if (lineItem.price > 0) lineItems.push(lineItem);
-                else console.warn(`[Clover] Skipping invalid price line item: ${itemName} (${lineItem.price})`);
-            }
+            const lineItem: any = { name: itemName, price: Math.round(unitPrice * 100), quantitySold: quantity };
+            if (lineItem.price > 0) lineItems.push(lineItem);
+            else console.warn(`[Clover] Skipping invalid price line item: ${itemName} (${lineItem.price})`);
+
         }
 
         if (lineItems.length === 0) {
@@ -781,12 +780,21 @@ export async function createCloverOrder(
         }
 
         for (const itemStr of orderItems) {
-            const quantityMatch = itemStr.match(/^(\d+)x\s*(.+)$/i);
-            const quantity = quantityMatch ? parseInt(quantityMatch[1]) : 1;
-            const itemNameWithPrice = quantityMatch ? quantityMatch[2] : itemStr;
+            console.log(`[Clover] Creating line item: ${itemStr}`);
 
+            let quantity = 1;
+            let itemNameWithPrice = itemStr;
+            const quantityMatch = itemStr.match(/\s*x(\d+)$/i);
+            if (quantityMatch) {
+                quantity = parseInt(quantityMatch[1]);
+                // Remove " x<number>" from string to get the item name + optional price
+                itemNameWithPrice = itemStr.replace(/\s*x\d+$/i, '').trim();
+            }
+
+            // Extract price if present: "Item Name: $9.99"
             const priceMatch = itemNameWithPrice.match(/:\s*\$([\d.]+)/);
             const totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+
             const itemName = itemNameWithPrice.replace(/:\s*\$[\d.]+.*$/, '').trim();
 
             let unitPrice: number;
@@ -799,7 +807,7 @@ export async function createCloverOrder(
                 );
                 unitPrice = matchingMenuItem ? parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, '')) : 9.99;
             }
-
+            console.log(`[Clover] Creating line item: ${itemName} - Unit price: ${unitPrice}, Quantity: ${quantity}`);
             for (let i = 0; i < quantity; i++) {
                 const lineItem: any = { name: itemName, price: Math.round(unitPrice * 100) };
                 if (lineItem.price > 0) lineItems.push(lineItem);

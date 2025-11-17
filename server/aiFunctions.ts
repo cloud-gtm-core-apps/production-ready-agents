@@ -32,11 +32,12 @@ function buildOrderSummaryPrompt(currentTimeString: string, menuContext: string)
   
   IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
   
+  
   If an order has been placed, extract:
   1. Customer name (if mentioned)
   2. All items ordered (be specific, include quantities, and prices):
      - Match items mentioned in the conversation to the menu items provided above
-     - Use exact menu item names when possible
+     - Use exact menu item names
      - Include the price from the menu for each item in the format: "Item Name: $X.XX"
      - For quantities, include quantity and calculate total price: "2x Item Name: $X.XX" (where $X.XX is the total for that quantity)
      - Include customizations or modifications in the item name: "Item Name (customization): $X.XX"
@@ -119,6 +120,7 @@ export async function analyzeOrderSummaryFromConversation(
         return { orderMade: false };
     }
 }
+
 
 function findExplicitTimes(text: string): string[] {
     const matches: string[] = [];
