@@ -3,7 +3,7 @@
     "compilerOptions": {
         "target": "ES2020",
         "module": "ESNext",
-        "moduleResolution": "node",
+        "moduleResolution": "nodenext", // <-- important for ES modules
         "outDir": "server/dist",
         "baseUrl": ".",
         "paths": {
@@ -14,7 +14,7 @@
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
-        "noEmit": false,
+        "noEmit": false, // make sure emit is allowed
         "allowImportingTsExtensions": false,
         "lib": [
             "ES2020"
