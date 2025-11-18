@@ -1,18 +1,18 @@
 import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
-import passport from "./auth";
-import { storage } from "./storage";
+import passport from "./auth.js";
+import { storage } from "./storage.js";
 import { insertUserSchema, type Message, type MenuItem } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { db } from "./db";
+import { db } from "./db.js";
 import { eq, and } from "drizzle-orm";
 import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@shared/schema";
-import { isAuthenticated } from "./utils";
-import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils";
-import { openai } from "./clients";
-import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals";
-import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions";
+import { isAuthenticated } from "./utils.js";
+import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
+import { openai } from "./clients.js";
+import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals.js";
+import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions.js";
 const MESSAGING_SERVICE_URL = "https://macgateway.ngrok.app/send";
 
 async function sendMessageThroughRelay(to: string, message: string): Promise<void> {

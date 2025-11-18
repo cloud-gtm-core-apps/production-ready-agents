@@ -1,12 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
-import { storage } from "./storage";
-import { menuItemsCache } from "./globals";
+import { storage } from "./storage.js";
+import { menuItemsCache } from "./globals.js";
 import { Message } from "@shared/schema";
-import { openai } from "./clients";
-import { IStorage } from "./storage";
+import { openai } from "./clients.js";
+import { IStorage } from "./storage.js";
 import { oauthTokens } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
-import { db } from "./db";
+import { db } from "./db.js";
 
 
 // Check if user is authenticated

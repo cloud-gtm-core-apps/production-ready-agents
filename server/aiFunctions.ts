@@ -10,7 +10,7 @@ import {
     TrucubeSuggestedResponse,
     OpenAIConditionalOutput,
     TrucubeConditionalOutput,
-} from "./utils";
+} from "./utils.js";
 
 type Meridiem = "AM" | "PM";
 

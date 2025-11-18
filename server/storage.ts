@@ -1,5 +1,5 @@
 import { type User, type InsertUser, type Order, type InsertOrder, type OrderConversation, type InsertOrderConversation, type MenuItem, type InsertMenuItem, type Customer, type InsertCustomer, type OrderHistory, type InsertOrderHistory, type CustomerStats, type InsertCustomerStats, type MenuItemPopularityAggregate, type InsertMenuItemPopularityAggregate, type Message, users, orders, orderConversations, menuItems, customers, orderHistory, customerStats, menuItemPopularityAggregates } from "@shared/schema";
-import { db } from "./db";
+import { db } from "./db.js";
 import { eq, and, desc, sql, ne, gte, lt, lte, inArray, isNull } from "drizzle-orm";
 import postgres from "postgres";
 
