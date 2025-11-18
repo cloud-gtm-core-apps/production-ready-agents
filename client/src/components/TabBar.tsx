@@ -22,7 +22,7 @@ export default function TabBar({ activeTab, onTabChange, counts }: TabBarProps) 
 
   return (
     <div className="absolute bottom-0 left-0 right-0 bg-black border-t border-border">
-      <div className="flex items-center justify-around px-1 pt-3 pb-8">
+      <div className="flex items-center justify-around px-1 pt-2 sm:pt-3 pb-6 sm:pb-8" style={{ paddingBottom: `calc(1.5rem + env(safe-area-inset-bottom))` }}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
           
@@ -30,7 +30,7 @@ export default function TabBar({ activeTab, onTabChange, counts }: TabBarProps) 
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 flex-1 relative min-h-[48px]"
+              className="flex flex-col items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 flex-1 relative min-h-[48px] touch-manipulation"
               data-testid={`button-tab-${tab.id}`}
             >
               <div className="flex items-center gap-1">

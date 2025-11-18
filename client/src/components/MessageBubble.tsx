@@ -15,7 +15,7 @@ export default function MessageBubble({ text, isOutgoing = false, timestamp, isA
       isOutgoing ? "items-start" : "items-end"
     )}>
       <div className={cn(
-        "max-w-[75%] px-4 py-2 rounded-2xl",
+        "max-w-[85%] sm:max-w-[75%] px-3 sm:px-4 py-2 rounded-2xl",
         isAIOrganized 
           ? "bg-purple-600 text-white rounded-br-md border-2 border-purple-400" 
           : isOutgoing 
@@ -23,14 +23,14 @@ export default function MessageBubble({ text, isOutgoing = false, timestamp, isA
             : "bg-primary text-primary-foreground rounded-br-md"
       )}>
         {isAIOrganized && (
-          <div className="flex items-center gap-1.5 mb-3 pb-2 border-b border-purple-400/30">
+          <div className="flex items-center gap-1.5 mb-2 sm:mb-3 pb-2 border-b border-purple-400/30">
             <Sparkles className="h-3.5 w-3.5" />
             <span className="text-xs font-medium">AI Organized</span>
           </div>
         )}
         <p className={cn(
-          "text-base",
-          isAIOrganized ? "whitespace-pre-line leading-7" : "leading-relaxed"
+          "text-sm sm:text-base",
+          isAIOrganized ? "whitespace-pre-line leading-6 sm:leading-7" : "leading-relaxed"
         )}>{text}</p>
       </div>
       {timestamp && (

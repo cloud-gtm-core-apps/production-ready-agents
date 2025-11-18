@@ -7,7 +7,7 @@ interface AISuggestedResponseProps {
 
 export default function AISuggestedResponse({ suggestion, onUseSuggestion }: AISuggestedResponseProps) {
   return (
-    <div className="px-4 py-3">
+    <div className="px-3 sm:px-4 py-2 sm:py-3">
       <div className="flex items-start gap-2">
         <div className="flex-shrink-0 mt-0.5">
           <Sparkles className="h-4 w-4 text-purple-400" />
@@ -16,10 +16,10 @@ export default function AISuggestedResponse({ suggestion, onUseSuggestion }: AIS
           <p className="text-xs font-medium text-purple-300 mb-1.5">AI Suggested Response</p>
           <div
             onClick={() => onUseSuggestion(suggestion)}
-            className="w-full bg-purple-600 rounded-lg px-4 py-2.5 cursor-pointer hover:bg-purple-600/90 transition-colors"
+            className="w-full bg-purple-600 rounded-lg px-3 sm:px-4 py-2 sm:py-2.5 cursor-pointer hover:bg-purple-600/90 transition-colors min-h-[44px] flex items-center"
             data-testid="button-ai-suggestion"
           >
-            <p className="text-sm text-white leading-relaxed">{suggestion}</p>
+            <p className="text-xs sm:text-sm text-white leading-relaxed">{suggestion}</p>
           </div>
           <p className="text-xs text-purple-300/60 mt-1.5">Tap to use this response</p>
         </div>

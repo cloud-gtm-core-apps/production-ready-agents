@@ -1,10 +1,25 @@
 import { ReactNode } from 'react';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 interface IPhoneFrameProps {
   children: ReactNode;
 }
 
 export default function IPhoneFrame({ children }: IPhoneFrameProps) {
+  const isMobile = useIsMobile();
+
+  // On mobile devices, render without frame - full screen
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 w-full h-full bg-black overflow-hidden">
+        <div className="relative w-full h-full">
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  // On desktop, show the iPhone frame for preview
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-muted to-background p-4">
       <div className="relative w-full max-w-[393px] h-[852px] bg-black rounded-[60px] shadow-2xl overflow-hidden">

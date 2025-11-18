@@ -175,7 +175,7 @@ export default function ConversationView({
         return prev; // Keep existing initial order details
       });
       // Set aiOrderDetails if we don't have local edits (only if null/undefined)
-      setAiOrderDetails((prev) => prev || conversation.orderDetails);
+      setAiOrderDetails((prev) => prev ?? conversation.orderDetails ?? null);
     }
   }, [conversation.id, conversation.orderDetails]); // Watch both conversation.id and orderDetails
 
@@ -373,19 +373,19 @@ export default function ConversationView({
     <div className="flex flex-col h-full bg-gradient-to-b from-[hsl(var(--background-gradient-start))] to-[hsl(var(--background-gradient-end))]">
       <IOSStatusBar />
 
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-black">
+      <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 border-b border-border bg-black">
         <Button
           size="icon"
           variant="ghost"
           onClick={onBack}
           data-testid="button-back"
-          className="rounded-full"
+          className="rounded-full min-h-[44px] min-w-[44px]"
         >
           <ArrowLeft className="w-5 h-5 text-primary" />
         </Button>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="font-semibold text-lg truncate" data-testid="text-contact-name">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            <h2 className="font-semibold text-base sm:text-lg truncate" data-testid="text-contact-name">
               {conversation.customerName || conversation.phoneNumber}
             </h2>
             {getOrderCountText() && (
@@ -408,16 +408,16 @@ export default function ConversationView({
             <p className="text-xs text-muted-foreground">{conversation.phoneNumber}</p>
           )}
         </div>
-        <Button size="icon" variant="ghost" data-testid="button-call" className="rounded-full">
+        <Button size="icon" variant="ghost" data-testid="button-call" className="rounded-full min-h-[44px] min-w-[44px]">
           <Phone className="w-5 h-5 text-primary" />
         </Button>
-        <Button size="icon" variant="ghost" data-testid="button-info" className="rounded-full">
+        <Button size="icon" variant="ghost" data-testid="button-info" className="rounded-full min-h-[44px] min-w-[44px]">
           <Info className="w-5 h-5 text-primary" />
         </Button>
       </div>
 
       <div
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 sm:py-4 space-y-2 sm:space-y-3"
         ref={messagesContainerRef}
         style={{ paddingBottom: aiSuggestedResponse ? '5rem' : '2rem' }}
       >
@@ -455,7 +455,7 @@ export default function ConversationView({
       )}
 
       {orderDetailsToDisplay && (
-        <div className="px-4 pb-3 max-h-[60vh] overflow-y-auto">
+        <div className="px-3 sm:px-4 pb-2 sm:pb-3 max-h-[60vh] overflow-y-auto">
           <EditableOrderSummary
             orderDetails={orderDetailsToDisplay}
             orderStatus={normalizedOrderStatus}
@@ -565,33 +565,33 @@ export default function ConversationView({
         </div>
       )}
 
-      <div className="px-4 py-3 border-t border-border bg-black">
+      <div className="px-3 sm:px-4 py-2 sm:py-3 border-t border-border bg-black" style={{ paddingBottom: `calc(0.5rem + env(safe-area-inset-bottom))` }}>
         <div className="flex items-center gap-2">
           <QuickReplyTemplates onSelectTemplate={handleQuickReply} />
-          <div className="flex-1 flex items-center gap-2 bg-muted rounded-full px-4 py-2">
+          <div className="flex-1 flex items-center gap-2 bg-muted rounded-full px-3 sm:px-4 py-2">
             <input
               type="text"
               placeholder="iMessage"
               value={messageInput}
               onChange={(event) => setMessageInput(event.target.value)}
               onKeyPress={handleKeyPress}
-              className="flex-1 bg-transparent outline-none text-base text-foreground"
+              className="flex-1 bg-transparent outline-none text-sm sm:text-base text-foreground"
               data-testid="input-message"
               disabled={isSending}
             />
             <button
               onClick={handleSendMessage}
               disabled={!messageInput.trim() || isSending}
-              className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer min-h-[44px] min-w-[44px]"
               data-testid="button-send"
             >
-              <span className="text-primary-foreground text-lg">↑</span>
+              <span className="text-primary-foreground text-base sm:text-lg">↑</span>
             </button>
           </div>
         </div>
       </div>
 
-      <div className="h-8 bg-transparent" />
+      <div className="h-2 sm:h-8 bg-transparent" />
     </div>
   );
 }
