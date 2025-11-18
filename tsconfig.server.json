@@ -1,10 +1,11 @@
 {
-    "extends": "./tsconfig.json",
     "compilerOptions": {
-        "noEmit": false,
-        "outDir": "server/dist",
+        "target": "ES2020",
         "module": "commonjs",
-        "target": "ES2020"
+        "outDir": "server/dist",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true
     },
     "include": [
         "server/**/*"
