@@ -422,6 +422,102 @@ export async function TrucubeSuggestedResponse(
     }
 }
 
+// Conditional AI Output functions
+export async function OpenAIConditionalOutput(
+    systemPrompt: string,
+    conversationText: string,
+    customerName?: string
+): Promise<{
+    edgeCaseDetected: boolean;
+    edgeCaseType?: string;
+    orderDetails?: {
+        customerName: string;
+        items: string[];
+        pickupTime?: string;
+        notes?: string;
+    };
+    suggestedResponse?: string;
+}> {
+    const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Analyze this conversation:\n\n${conversationText}\n\nCustomer name from order info: ${customerName || 'unknown'}` }
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+    });
+
+    try {
+        return JSON.parse(completion.choices[0].message.content || '{"edgeCaseDetected": false}');
+    } catch (error) {
+        console.error("Error parsing OpenAI conditional output:", error);
+        return { edgeCaseDetected: false };
+    }
+}
+
+export async function TrucubeConditionalOutput(
+    systemPrompt: string,
+    conversationText: string,
+    customerName?: string
+): Promise<{
+    edgeCaseDetected: boolean;
+    edgeCaseType?: string;
+    orderDetails?: {
+        customerName: string;
+        items: string[];
+        pickupTime?: string;
+        notes?: string;
+    };
+    suggestedResponse?: string;
+}> {
+    const BEARER_TOKEN = process.env.TRUCUBE_BEARER_TOKEN;
+    if (!BEARER_TOKEN) {
+        throw new Error("TRUCUBE_BEARER_TOKEN is not set");
+    }
+
+    try {
+        const response = await fetch("http://98.15.217.173:3000/api/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${BEARER_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: "llama3.1:latest",
+                messages: [
+                    {
+                        role: "system",
+                        content: systemPrompt,
+                    },
+                    {
+                        role: "user",
+                        content: `Analyze this conversation:\n\n${conversationText}\n\nCustomer name from order info: ${customerName || 'unknown'}`,
+                    },
+                ],
+                stream: false,
+            }),
+        });
+
+        const data = await response.json();
+        const assistantMessage = data?.choices?.[0]?.message?.content;
+
+        if (!assistantMessage) {
+            return { edgeCaseDetected: false };
+        }
+
+        try {
+            return JSON.parse(assistantMessage);
+        } catch (error) {
+            console.error("Error parsing Trucube conditional output:", error);
+            return { edgeCaseDetected: false };
+        }
+    } catch (error) {
+        console.error("Error calling Trucube API for conditional output:", error);
+        return { edgeCaseDetected: false };
+    }
+}
+
 // Random name generator for test conversations (Dearborn demographic)
 const FIRST_NAMES = ['Fatima', 'Ahmed', 'Nour', 'Layla', 'Hassan', 'Zainab', 'Youssef', 'Rania', 'Omar', 'Maryam', 'Ali', 'Dina', 'Karim', 'Sara', 'Hadi', 'Mariam', 'Bilal', 'Lina', 'Tariq', 'Amira'];
 const LAST_NAMES = ['Hassan', 'Ali', 'Bakri', 'Mansour', 'Khalil', 'Ahmad', 'Hammoud', 'Saleh', 'Ibrahim', 'Farah', 'Rahman', 'Mustafa', 'Nasser', 'Khoury', 'Masri', 'Saad'];

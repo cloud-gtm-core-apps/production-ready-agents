@@ -8,6 +8,8 @@ import {
     shouldGenerateAISuggestion,
     OpenAISuggestedResponse,
     TrucubeSuggestedResponse,
+    OpenAIConditionalOutput,
+    TrucubeConditionalOutput,
 } from "./utils";
 
 type Meridiem = "AM" | "PM";
@@ -32,7 +34,6 @@ function buildOrderSummaryPrompt(currentTimeString: string, menuContext: string)
   
   IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
   
-  
   If an order has been placed, extract:
   1. Customer name (if mentioned)
   2. All items ordered (be specific, include quantities, and prices):
@@ -50,6 +51,15 @@ function buildOrderSummaryPrompt(currentTimeString: string, menuContext: string)
      - Example: If current time is 2:00 PM and customer says "in 30 minutes", return "2:30 PM"
      - Pay strict attention to the entire conversation and note when the pickup time changes.
   4. Any special notes or instructions
+
+IMPORTANT EDGE CASES TO CHECK:
+1. Half Sandwich Request:
+   - IMPORTANT ORDERING RULES: All sandwiches are sold whole. The Lunch special is the only way someone can get a ½ sandwich.
+   - If a customer requests half a sandwich, locate the Lunch special in the menu and add it to the items.
+   - The Lunch special should be added with the correct price from the menu.
+
+If an edge case is detected, you must:
+1. Convert any half sandwich requests to just the lunch special.
 
 Return only valid JSON, no markdown code blocks, and no explanations.
 JSON format:
@@ -120,7 +130,6 @@ export async function analyzeOrderSummaryFromConversation(
         return { orderMade: false };
     }
 }
-
 
 function findExplicitTimes(text: string): string[] {
     const matches: string[] = [];
@@ -237,6 +246,118 @@ export function detectPickupTimeFromConversation(
     });
 
     return confirmedPickup;
+}
+
+export type ConditionalAIOutput = {
+    orderSummary?: OrderSummaryResult;
+    suggestedResponse?: string | null;
+};
+
+/**
+ * Check for specific edge cases in the conversation and generate conditional AI outputs.
+ * If an edge case matches, this will override the standard AIOrderSummary and AISuggestedResponse.
+ */
+export async function analyzeConditionalAIOutput(
+    messages: Message[],
+    userId: string,
+    orderId: string,
+    customerName?: string,
+    menuItems?: Array<{ name: string; price: string; category: string | null }>
+): Promise<ConditionalAIOutput | null> {
+    try {
+        const currentTime = new Date();
+        const currentTimeString = currentTime.toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        });
+
+        const conversationText = formatConversation(messages);
+        const menuContext = buildMenuContext(menuItems);
+
+        // Build system prompt for edge case detection and handling
+        const systemPrompt = `You are an order detection system for a restaurant. Analyze the conversation and check for specific edge cases.
+
+IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
+
+EDGE CASES TO CHECK:
+1. Half Sandwich Request:
+   - IMPORTANT ORDERING RULES: All sandwiches are sold whole. The Lunch special is the only way someone can get a ½ sandwich.
+   - If a customer requests half a sandwich, locate the Lunch special in the menu and add it to the items.
+   - The Lunch special should be added with the correct price from the menu.
+
+If an edge case is detected, you must:
+1. Convert any half sandwich requests to just the lunch special.
+2. Generate a suggested response for the restaurant manager to send
+
+Return only valid JSON, no markdown code blocks, and no explanations.
+JSON format:
+{
+  "edgeCaseDetected": boolean,
+  "edgeCaseType"?: string (e.g., "half_sandwich_request"),
+  "orderDetails"?: {
+    "customerName": string,
+    "items": string[],
+    "pickupTime"?: string,
+    "notes"?: string
+  },
+  "suggestedResponse"?: string
+}
+
+If no edge case is detected, return: {"edgeCaseDetected": false}`;
+
+        const getConditionalOutput = process.env.MODEL === "TRUCUBE"
+            ? TrucubeConditionalOutput
+            : OpenAIConditionalOutput;
+
+        const response = await getConditionalOutput(systemPrompt, conversationText, customerName);
+
+        if (!response || !response.edgeCaseDetected) {
+            return null;
+        }
+
+        const result: ConditionalAIOutput = {};
+
+        // Process order summary if order details exist
+        if (response.orderDetails) {
+            const orderSummary: OrderSummaryResult = {
+                orderMade: true,
+                orderDetails: {
+                    customerName: response.orderDetails.customerName?.trim() || customerName || "Customer",
+                    items: response.orderDetails.items || [],
+                    pickupTime: response.orderDetails.pickupTime,
+                    notes: response.orderDetails.notes,
+                },
+            };
+
+            // Convert relative pickup time if needed
+            if (orderSummary.orderDetails) {
+                const pickupTime = orderSummary.orderDetails.pickupTime;
+                if (pickupTime) {
+                    const convertedTime = convertRelativeTimeToAbsolute(pickupTime, currentTime);
+                    if (convertedTime) {
+                        orderSummary.orderDetails.pickupTime = convertedTime;
+                        console.log(
+                            `[Conditional AI] Converted relative time "${pickupTime}" to absolute time "${convertedTime}"`
+                        );
+                    }
+                }
+            }
+
+            result.orderSummary = orderSummary;
+        }
+
+        // Add suggested response if provided
+        if (response.suggestedResponse) {
+            result.suggestedResponse = response.suggestedResponse.trim();
+        }
+
+        console.log(`[Conditional AI] Edge case detected: ${response.edgeCaseType} for order ${orderId}`);
+        return result;
+    } catch (error) {
+        console.error(`[Conditional AI] Error analyzing conditional output for order ${orderId}:`, error);
+        return null;
+    }
 }
 
 // Helper function to generate AI suggested response
