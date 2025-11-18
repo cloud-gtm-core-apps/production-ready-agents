@@ -273,7 +273,7 @@ async function checkForOrderDetection(
             // Do a more detailed comparison of order details
             // Extract items from previous message by parsing the formatted text
             // Items appear after "Customer:" line and before notes/pickup time
-            const previousLines = previousText.split('\n').filter(line => line.trim());
+            const previousLines = previousText.split('\n').filter((line: string) => line.trim());
             const previousItems: string[] = [];
             let foundCustomer = false;
             let inItemsSection = false;
@@ -1409,7 +1409,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.redirect('/settings?error=token_exchange_failed');
       }
 
-      const tokenData = await tokenResponse.json();
+      const tokenData = await tokenResponse.json() as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
       console.log(`[OAuth] Full token response:`, JSON.stringify(tokenData, null, 2));
 
       // Get user ID from session (user needs to be logged in)
@@ -1596,8 +1600,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const categoriesData = await categoriesResponse.json();
-      const categories = categoriesData.elements || (Array.isArray(categoriesData) ? categoriesData : []);
+      const categoriesData = await categoriesResponse.json() as { elements?: unknown[] } | unknown[];
+      const categories = Array.isArray(categoriesData)
+        ? categoriesData
+        : ('elements' in categoriesData && Array.isArray(categoriesData.elements))
+          ? categoriesData.elements
+          : [];
       console.log(`[Clover Sync] Found ${categories.length} categories`);
 
       // Map Clover items to our menu items schema and save to database
@@ -1607,8 +1615,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // For each category, fetch its items
       for (const category of categories) {
         try {
-          const categoryId = category.id;
-          const categoryName = category.name;
+          const cat = category as { id?: string; name?: string };
+          const categoryId = cat.id;
+          const categoryName = cat.name;
 
           console.log(`[Clover Sync] Fetching items for category: ${categoryName} (${categoryId})`);
 
@@ -1627,41 +1636,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
 
-          const categoryItemsData = await categoryItemsResponse.json();
-          const categoryItems = categoryItemsData.elements || (Array.isArray(categoryItemsData) ? categoryItemsData : []);
+          const categoryItemsData = await categoryItemsResponse.json() as { elements?: unknown[] } | unknown[];
+          const categoryItems = Array.isArray(categoryItemsData)
+            ? categoryItemsData
+            : ('elements' in categoryItemsData && Array.isArray(categoryItemsData.elements))
+              ? categoryItemsData.elements
+              : [];
           console.log(`[Clover Sync] Found ${categoryItems.length} items in category "${categoryName}"`);
 
           // Process each item in this category
           for (const cloverItem of categoryItems) {
             try {
+              const item = cloverItem as {
+                name?: string;
+                hidden?: boolean;
+                price?: number;
+                description?: string;
+                imageHref?: string;
+              };
               // Skip if item doesn't have a name or is hidden
-              if (!cloverItem.name || cloverItem.hidden === true) {
+              if (!item.name || item.hidden === true) {
                 continue;
               }
 
               // Format price (Clover stores price in cents, convert to dollars)
-              const priceInCents = cloverItem.price || 0;
+              const priceInCents = item.price || 0;
               const priceInDollars = (priceInCents / 100).toFixed(2);
               const formattedPrice = `$${priceInDollars}`;
 
               // Create menu item with category
               const newItem = await storage.createMenuItem(userId, {
-                name: cloverItem.name,
+                name: item.name,
                 price: formattedPrice,
                 category: categoryName,
-                description: cloverItem.description || undefined,
-                imageUrl: cloverItem.imageHref || undefined,
-                isAvailable: !cloverItem.hidden,
+                description: item.description || undefined,
+                imageUrl: item.imageHref || undefined,
+                isAvailable: !item.hidden,
               } as any);
               syncedItems.push(newItem);
             } catch (error: any) {
-              console.error(`Error syncing item "${cloverItem.name}" in category "${categoryName}":`, error);
-              errors.push(`Failed to sync "${cloverItem.name}" in category "${categoryName}": ${error.message}`);
+              const item = cloverItem as { name?: string };
+              console.error(`Error syncing item "${item.name}" in category "${categoryName}":`, error);
+              errors.push(`Failed to sync "${item.name}" in category "${categoryName}": ${error.message}`);
             }
           }
         } catch (error: any) {
-          console.error(`Error processing category "${category.name}":`, error);
-          errors.push(`Failed to process category "${category.name}": ${error.message}`);
+          const cat = category as { name?: string };
+          console.error(`Error processing category "${cat.name}":`, error);
+          errors.push(`Failed to process category "${cat.name}": ${error.message}`);
         }
       }
 

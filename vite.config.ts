@@ -1,3 +1,4 @@
+// @ts-nocheck - This file uses ESM-only features (import.meta) and is a Vite config file
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";

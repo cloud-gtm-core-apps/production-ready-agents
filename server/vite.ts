@@ -1,3 +1,4 @@
+// @ts-nocheck - This file uses ESM-only features (import.meta) and is only used in development
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";

@@ -232,7 +232,9 @@ export async function TrucubeOrderSummary(
             }),
         });
 
-        const data = await response.json();
+        const data = await response.json() as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
 
         // Extract assistant response
         const assistantMessage = data?.choices?.[0]?.message?.content;
@@ -406,7 +408,9 @@ export async function TrucubeSuggestedResponse(
             }),
         });
 
-        const data = await response.json();
+        const data = await response.json() as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
 
         // Extract assistant response
         const assistantMessage = data?.choices?.[0]?.message?.content;
@@ -499,7 +503,9 @@ export async function TrucubeConditionalOutput(
             }),
         });
 
-        const data = await response.json();
+        const data = await response.json() as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
         const assistantMessage = data?.choices?.[0]?.message?.content;
 
         if (!assistantMessage) {
@@ -943,7 +949,7 @@ export async function createCloverOrder(
         });
 
         if (cloverResponse.ok) {
-            const cloverOrder = await cloverResponse.json();
+            const cloverOrder = await cloverResponse.json() as { id?: string };
             console.log(`[Clover] ✓ Successfully created order ${cloverOrder.id} in Clover`);
 
             // Save Clover order ID to the order record
