@@ -45,8 +45,8 @@ export default function OrderHistory() {
     }
   }, [data?.orders, page]);
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
+  const formatDate = (dateInput: Date | string) => {
+    const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -54,8 +54,8 @@ export default function OrderHistory() {
     });
   };
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
+  const formatTime = (dateInput: Date | string) => {
+    const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',

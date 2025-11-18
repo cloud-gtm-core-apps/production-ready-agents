@@ -136,7 +136,11 @@ export class DbStorage implements IStorage {
   }
 
   async createOrderConversation(conversation: InsertOrderConversation): Promise<OrderConversation> {
-    const result = await db.insert(orderConversations).values(conversation).returning();
+    // Type assertion needed because Drizzle's type inference for jsonb fields with optional properties
+    // (like isAIOrganized?: boolean in Message[]) can be overly strict with TypeScript's type checking.
+    // This is a known limitation when using .$type<>() with jsonb fields that have optional properties.
+    // The conversation parameter is already typed as InsertOrderConversation, so this is safe.
+    const result = await db.insert(orderConversations).values(conversation as any).returning();
     return result[0];
   }
 
@@ -152,13 +156,34 @@ export class DbStorage implements IStorage {
       }
 
       // Create new conversation row with the first message
-      conversation = await this.createOrderConversation({
+      // Ensure message conforms to Message type explicitly
+      const typedMessage: Message = message.isAIOrganized !== undefined
+        ? {
+            id: message.id,
+            text: message.text,
+            isOutgoing: message.isOutgoing,
+            timestamp: message.timestamp,
+            isAIOrganized: typeof message.isAIOrganized === 'boolean' 
+              ? message.isAIOrganized 
+              : Boolean(message.isAIOrganized)
+          }
+        : {
+            id: message.id,
+            text: message.text,
+            isOutgoing: message.isOutgoing,
+            timestamp: message.timestamp
+          };
+      const messagesArray: Message[] = [typedMessage];
+      
+      const conversationData: InsertOrderConversation = {
         userId,
         orderId,
         number: order.number,
-        messages: [message],
+        messages: messagesArray,
         updatedAt: new Date(),
-      });
+      };
+      
+      conversation = await this.createOrderConversation(conversationData);
     } else {
       // Get current messages array
       const currentMessages: Message[] = (conversation.messages as Message[]) || [];
