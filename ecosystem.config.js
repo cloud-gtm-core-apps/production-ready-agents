@@ -1,7 +1,8 @@
 module.exports = {
     apps: [{
-        name: 'orderflowux',
-        script: './dist/index.js',
+        name: 'api',
+        script: 'tsx',
+        args: 'server/dist/server/index.js',
         instances: 1,
         exec_mode: 'fork',
         env: {
@@ -20,7 +21,7 @@ module.exports = {
         max_restarts: 10,
         min_uptime: '10s',
         watch: false,
-        ignore_watch: ['node_modules', 'logs', 'dist']
+        ignore_watch: ['node_modules', 'logs', 'dist', 'server/dist']
     }]
 };
 
