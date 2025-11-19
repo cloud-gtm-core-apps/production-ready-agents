@@ -1,10 +1,5 @@
 import type { Response } from "express";
 
-// Store conversation contexts for AI conversations
-export const aiConversationContexts = new Map<
-    string,
-    Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
->();
 
 // Debounce timers for automatic order detection (2 seconds after last message)
 export const orderDetectionTimers = new Map<string, NodeJS.Timeout>();

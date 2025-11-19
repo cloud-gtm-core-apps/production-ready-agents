@@ -1,12 +1,13 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
 import { storage } from "./storage.js";
-import { menuItemsCache } from "./globals.js";
+import { menuItemsCache, type MenuItemCache } from "./globals.js";
 import { Message } from "@shared/schema";
 import { openai } from "./clients.js";
 import { IStorage } from "./storage.js";
 import { oauthTokens } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db.js";
+import { getRedisClient } from "./redis.js";
 
 
 // Check if user is authenticated
@@ -65,13 +66,33 @@ export function decrypt(encryptedText: string): string {
 // Get menu items with caching (1 day cache)
 // TODO: Fetch menu items from Clover API
 export async function getMenuItemsWithCache(userId: string): Promise<Array<{ name: string; price: string; category: string | null }>> {
-    const cached = menuItemsCache.get(userId);
+    const redis = getRedisClient();
+    const cacheKey = `menu:items:${userId}`;
     const now = Date.now();
 
-    // Check if cache exists and is still valid (1 day = 24 * 60 * 60 * 1000 ms)
-    if (cached && cached.expiresAt > now) {
-        console.log(`[Menu Cache] Using cached menu items for userId ${userId}`);
-        return cached.items;
+    // Use Redis if PRODUCTION is true
+    if (redis) {
+        try {
+            const cached = await redis.get(cacheKey);
+            if (cached) {
+                const cacheData: MenuItemCache = JSON.parse(cached);
+                // Check if cache is still valid (1 day = 24 * 60 * 60 * 1000 ms)
+                if (cacheData.expiresAt > now) {
+                    console.log(`[Menu Cache] Using Redis cached menu items for userId ${userId}`);
+                    return cacheData.items;
+                }
+            }
+        } catch (error) {
+            console.error(`[Menu Cache] Redis get error for userId ${userId}:`, error);
+            // Fall through to fetch from database
+        }
+    } else {
+        // Use in-memory cache (development)
+        const cached = menuItemsCache.get(userId);
+        if (cached && cached.expiresAt > now) {
+            console.log(`[Menu Cache] Using in-memory cached menu items for userId ${userId}`);
+            return cached.items;
+        }
     }
 
     // Fetch fresh menu items from database
@@ -87,12 +108,167 @@ export async function getMenuItemsWithCache(userId: string): Promise<Array<{ nam
 
     // Cache for 1 day
     const expiresAt = now + (24 * 60 * 60 * 1000);
-    menuItemsCache.set(userId, {
+    const cacheData: MenuItemCache = {
         items: formattedItems,
         expiresAt
-    });
+    };
+
+    // Store in Redis if PRODUCTION is true
+    if (redis) {
+        try {
+            // Store with TTL of 1 day (86400 seconds)
+            await redis.setex(cacheKey, 86400, JSON.stringify(cacheData));
+            console.log(`[Menu Cache] Stored menu items in Redis for userId ${userId}`);
+        } catch (error) {
+            console.error(`[Menu Cache] Redis set error for userId ${userId}:`, error);
+            // Continue even if Redis write fails
+        }
+    } else {
+        // Store in in-memory cache (development)
+        menuItemsCache.set(userId, cacheData);
+    }
 
     return formattedItems;
+}
+
+// Order detection timer management with Redis support
+interface TimerMetadata {
+    userId: string;
+    orderId: string;
+    expiresAt: number;
+}
+
+export async function setOrderDetectionTimer(
+    userId: string,
+    orderId: string,
+    delayMs: number,
+    onExpire: (userId: string, orderId: string) => Promise<void>
+): Promise<NodeJS.Timeout> {
+    const redis = getRedisClient();
+    const cacheKey = `order:detection:timer:${orderId}`;
+    const expiresAt = Date.now() + delayMs;
+
+    // Store timer metadata in Redis if PRODUCTION is true
+    if (redis) {
+        try {
+            const metadata: TimerMetadata = { userId, orderId, expiresAt };
+            // Store with TTL slightly longer than delay (3 seconds for 2 second delay)
+            await redis.setex(cacheKey, 3, JSON.stringify(metadata));
+            console.log(`[Order Detection Timer] Stored timer in Redis for order ${orderId}`);
+        } catch (error) {
+            console.error(`[Order Detection Timer] Redis set error for order ${orderId}:`, error);
+        }
+    }
+
+    // Create the actual timer
+    const timer = setTimeout(async () => {
+        // Remove from Redis when timer fires
+        if (redis) {
+            try {
+                await redis.del(cacheKey);
+            } catch (error) {
+                console.error(`[Order Detection Timer] Redis delete error for order ${orderId}:`, error);
+            }
+        }
+
+        console.log(`[Order Detection] Debounce timer expired for order ${orderId}, triggering analysis...`);
+        await onExpire(userId, orderId);
+
+        // Remove from in-memory cache if still exists
+        const { orderDetectionTimers } = await import('./globals.js');
+        orderDetectionTimers.delete(orderId);
+    }, delayMs);
+
+    // Store in in-memory cache (always, for immediate access)
+    const { orderDetectionTimers } = await import('./globals.js');
+    orderDetectionTimers.set(orderId, timer);
+
+    return timer;
+}
+
+export async function clearOrderDetectionTimer(orderId: string): Promise<void> {
+    const redis = getRedisClient();
+    const cacheKey = `order:detection:timer:${orderId}`;
+
+    // Clear from Redis if PRODUCTION is true
+    if (redis) {
+        try {
+            await redis.del(cacheKey);
+            console.log(`[Order Detection Timer] Cleared Redis timer for order ${orderId}`);
+        } catch (error) {
+            console.error(`[Order Detection Timer] Redis delete error for order ${orderId}:`, error);
+        }
+    }
+
+    // Clear from in-memory cache
+    const { orderDetectionTimers } = await import('./globals.js');
+    const existingTimer = orderDetectionTimers.get(orderId);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+        orderDetectionTimers.delete(orderId);
+        console.log(`[Order Detection Timer] Cleared in-memory timer for order ${orderId}`);
+    }
+}
+
+export async function restoreOrderDetectionTimers(
+    onExpire: (userId: string, orderId: string) => Promise<void>
+): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) {
+        return; // No Redis, nothing to restore
+    }
+
+    try {
+        // Get all timer keys
+        const keys = await redis.keys('order:detection:timer:*');
+        const now = Date.now();
+
+        for (const key of keys) {
+            try {
+                const cached = await redis.get(key);
+                if (cached) {
+                    const metadata: TimerMetadata = JSON.parse(cached);
+                    const remainingTime = metadata.expiresAt - now;
+
+                    if (remainingTime > 0) {
+                        // Timer hasn't expired yet, restore it
+                        console.log(`[Order Detection Timer] Restoring timer for order ${metadata.orderId}, ${remainingTime}ms remaining`);
+                        await setOrderDetectionTimer(metadata.userId, metadata.orderId, remainingTime, onExpire);
+                    } else {
+                        // Timer should have fired, trigger detection immediately
+                        console.log(`[Order Detection Timer] Timer for order ${metadata.orderId} expired during downtime, triggering detection`);
+                        await redis.del(key);
+                        await onExpire(metadata.userId, metadata.orderId);
+                    }
+                }
+            } catch (error) {
+                console.error(`[Order Detection Timer] Error restoring timer from key ${key}:`, error);
+                // Clean up invalid key
+                await redis.del(key);
+            }
+        }
+    } catch (error) {
+        console.error('[Order Detection Timer] Error restoring timers:', error);
+    }
+}
+
+// Clear menu items cache (works with both Redis and in-memory cache)
+export async function clearMenuItemsCache(userId: string): Promise<void> {
+    const redis = getRedisClient();
+    const cacheKey = `menu:items:${userId}`;
+
+    if (redis) {
+        try {
+            await redis.del(cacheKey);
+            console.log(`[Menu Cache] Cleared Redis cache for userId ${userId}`);
+        } catch (error) {
+            console.error(`[Menu Cache] Redis delete error for userId ${userId}:`, error);
+        }
+    } else {
+        // Clear in-memory cache (development)
+        menuItemsCache.delete(userId);
+        console.log(`[Menu Cache] Cleared in-memory cache for userId ${userId}`);
+    }
 }
 
 // Convert relative time strings to absolute times

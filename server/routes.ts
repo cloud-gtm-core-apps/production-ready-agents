@@ -9,9 +9,9 @@ import { db } from "./db.js";
 import { eq, and } from "drizzle-orm";
 import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@shared/schema";
 import { isAuthenticated } from "./utils.js";
-import { encrypt, decrypt, getMenuItemsWithCache, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
+import { encrypt, decrypt, getMenuItemsWithCache, clearMenuItemsCache, setOrderDetectionTimer, clearOrderDetectionTimer, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
 import { openai } from "./clients.js";
-import { aiConversationContexts, orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals.js";
+import { orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals.js";
 import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions.js";
 const MESSAGING_SERVICE_URL = "https://macgateway.ngrok.app/send";
 
@@ -126,26 +126,17 @@ function calculateTotalFromItems(items?: string[]): string | undefined {
 }
 
 // Helper function to trigger debounced order detection
-function triggerDebouncedOrderDetection(userId: string, orderId: string) {
+async function triggerDebouncedOrderDetection(userId: string, orderId: string) {
   // Clear existing timer if any
-  const existingTimer = orderDetectionTimers.get(orderId);
-  if (existingTimer) {
-    clearTimeout(existingTimer);
-  }
+  await clearOrderDetectionTimer(orderId);
 
-  // Set new timer for 2 seconds
-  const timer = setTimeout(async () => {
-    console.log(`[Order Detection] Debounce timer expired for order ${orderId}, triggering analysis...`);
-    await checkForOrderDetection(userId, orderId);
-    orderDetectionTimers.delete(orderId);
-  }, 2000); // 2 second debounce
-
-  orderDetectionTimers.set(orderId, timer);
+  // Set new timer for 2 seconds (with Redis support if PRODUCTION=true)
+  await setOrderDetectionTimer(userId, orderId, 2000, checkForOrderDetection);
   console.log(`[Order Detection] Debounce timer started for order ${orderId} (2 seconds)`);
 }
 
 // Helper function to check for order detection asynchronously
-async function checkForOrderDetection(
+export async function checkForOrderDetection(
   userId: string,
   orderId: string
 ): Promise<void> {
@@ -1038,7 +1029,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Trigger debounced order detection after Rod's message
-      triggerDebouncedOrderDetection(userId, orderId);
+      await triggerDebouncedOrderDetection(userId, orderId);
 
       res.json({ success: true });
     } catch (error) {
@@ -1268,7 +1259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       (async () => {
         try {
           // Trigger order detection (non-blocking)
-          triggerDebouncedOrderDetection(userId, orderId);
+          await triggerDebouncedOrderDetection(userId, orderId);
 
           // Generate AI suggestion asynchronously
           let aiSuggestion: string | null = null;
@@ -1702,7 +1693,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Clear menu items cache
-      menuItemsCache.delete(userId);
+      await clearMenuItemsCache(userId);
 
       res.json({
         success: true,

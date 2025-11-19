@@ -3,8 +3,9 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import passport from "./auth.js";
-import { registerRoutes } from "./routes.js";
+import { registerRoutes, checkForOrderDetection } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
+import { restoreOrderDetectionTimers } from "./utils.js";
 
 const app = express();
 
@@ -115,6 +116,11 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+
+  // Restore order detection timers from Redis (if PRODUCTION=true)
+  if (process.env.PRODUCTION === 'true') {
+    await restoreOrderDetectionTimers(checkForOrderDetection);
+  }
 
   // Register Routes
   const server = await registerRoutes(app);
