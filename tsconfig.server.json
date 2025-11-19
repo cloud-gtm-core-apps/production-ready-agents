@@ -3,8 +3,8 @@
     "compilerOptions": {
         "target": "ES2020",
         "module": "ESNext",
-        "moduleResolution": "bundler",
-        "outDir": "server/dist",
+        "moduleResolution": "nodenext",
+        "outDir": "dist",
         "baseUrl": ".",
         "paths": {
             "@shared/*": [

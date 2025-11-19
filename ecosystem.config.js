@@ -2,7 +2,6 @@ module.exports = {
     apps: [{
         name: 'orderflowux',
         script: './dist/index.js',
-        cwd: process.env.HOME ? `${process.env.HOME}/OrderFlowUX` : './',
         instances: 1,
         exec_mode: 'fork',
         env: {
