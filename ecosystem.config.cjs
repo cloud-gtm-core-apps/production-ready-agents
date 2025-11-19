@@ -1,4 +1,5 @@
 const path = require('path');
+require('dotenv').config(); // Load .env file
 
 module.exports = {
     apps: [{
@@ -9,11 +10,16 @@ module.exports = {
         exec_mode: 'fork',
         env: {
             NODE_ENV: 'production',
-            PORT: 5000
+            PORT: process.env.PORT || 5000,
+            DATABASE_URL: process.env.DATABASE_URL,
+            SESSION_SECRET: process.env.SESSION_SECRET,
+            // Add any other environment variables your app needs
         },
         env_production: {
             NODE_ENV: 'production',
-            PORT: 5000
+            PORT: process.env.PORT || 5000,
+            DATABASE_URL: process.env.DATABASE_URL,
+            SESSION_SECRET: process.env.SESSION_SECRET,
         },
         error_file: './logs/pm2-error.log',
         out_file: './logs/pm2-out.log',

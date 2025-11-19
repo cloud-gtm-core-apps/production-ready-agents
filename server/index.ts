@@ -1,11 +1,17 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import passport from "./auth.js";
 import { registerRoutes } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
 
 const app = express();
+
+// Trust proxy for production (needed if behind reverse proxy/load balancer)
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
 
 // Webhook verification
 declare module 'http' {
@@ -20,14 +26,32 @@ app.use(express.json({
   }
 }));
 
+// Configure PostgreSQL session store
+const PgSession = connectPgSimple(session);
+let sessionStore: connectPgSimple.PGStore | undefined;
+
+if (process.env.DATABASE_URL) {
+  // Use connection string directly - connect-pg-simple will create its own pg.Pool
+  sessionStore = new PgSession({
+    conString: process.env.DATABASE_URL,
+    tableName: 'session', // Table name for sessions
+    createTableIfMissing: true, // Automatically create the session table if it doesn't exist
+  });
+  
+  // Clean up expired sessions every hour
+  sessionStore.startInterval();
+}
+
 // Session configuration
 export const sessionMiddleware = session({
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
+    sameSite: (process.env.SESSION_SAME_SITE as 'strict' | 'lax' | 'none' | undefined) || 'lax',
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
   }
 });
