@@ -1,7 +1,8 @@
 module.exports = {
     apps: [{
         name: 'api',
-        script: 'tsx',
+        interpreter: 'node',
+        script: './node_modules/.bin/tsx',
         args: 'server/dist/server/index.js',
         instances: 1,
         exec_mode: 'fork',
