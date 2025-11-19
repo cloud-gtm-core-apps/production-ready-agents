@@ -4,8 +4,7 @@ module.exports = {
     apps: [{
         name: 'api',
         interpreter: 'node',
-        script: path.join(__dirname, 'node_modules', '.bin', 'tsx'),
-        args: path.join(__dirname, 'server', 'dist', 'server', 'index.js'),
+        script: path.join(__dirname, 'dist', 'index.js'),
         instances: 1,
         exec_mode: 'fork',
         env: {
@@ -24,7 +23,7 @@ module.exports = {
         max_restarts: 10,
         min_uptime: '10s',
         watch: false,
-        ignore_watch: ['node_modules', 'logs', 'dist', 'server/dist']
+        ignore_watch: ['node_modules', 'logs', 'dist']
     }]
 };
 
