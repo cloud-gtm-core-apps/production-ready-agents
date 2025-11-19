@@ -9,9 +9,9 @@ import { db } from "./db.js";
 import { eq, and } from "drizzle-orm";
 import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@shared/schema";
 import { isAuthenticated } from "./utils.js";
-import { encrypt, decrypt, getMenuItemsWithCache, clearMenuItemsCache, setOrderDetectionTimer, clearOrderDetectionTimer, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
+import { encrypt, decrypt, getMenuItemsWithCache, clearMenuItemsCache, setOrderDetectionTimer, clearOrderDetectionTimer, emitSSEWithRedis, getRecentSSEEvents, setupRedisSSESubscription, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
 import { openai } from "./clients.js";
-import { orderDetectionTimers, menuItemsCache, sseClients, aiSuggestedResponses } from "./globals.js";
+import { sseClients, aiSuggestedResponses } from "./globals.js";
 import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions.js";
 const MESSAGING_SERVICE_URL = "https://macgateway.ngrok.app/send";
 
@@ -63,13 +63,13 @@ async function sendMessageThroughRelay(to: string, message: string): Promise<voi
 
 const INITIAL_TEST_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
 
-function emitSSE(userId: string, event: string, data: unknown) {
+// Helper function to send SSE payload to local clients
+function sendSSEToClients(userId: string, payload: string) {
   const clients = sseClients.get(userId);
   if (!clients || clients.size === 0) {
     return;
   }
 
-  const payload = `data: ${JSON.stringify({ event, data })}\n\n`;
   const staleClients: Response[] = [];
 
   for (const client of Array.from(clients)) {
@@ -97,6 +97,11 @@ function emitSSE(userId: string, event: string, data: unknown) {
       sseClients.delete(userId);
     }
   }
+}
+
+// Emit SSE event (with Redis support if PRODUCTION=true)
+async function emitSSE(userId: string, event: string, data: unknown) {
+  await emitSSEWithRedis(userId, event, data, sendSSEToClients);
 }
 
 function calculateTotalFromItems(items?: string[]): string | undefined {
@@ -471,6 +476,13 @@ export async function checkForOrderDetection(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Setup Redis SSE subscription (if PRODUCTION=true)
+  if (process.env.PRODUCTION === 'true') {
+    setupRedisSSESubscription((userId, event, data) => {
+      const payload = `data: ${JSON.stringify({ event, data })}\n\n`;
+      sendSSEToClients(userId, payload);
+    });
+  }
   // Auth routes
 
   // Signup route
@@ -1021,7 +1033,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.addMessageToOrder(userId, orderId, rodMessage);
       await storage.updateOrderLastMessage(orderId, new Date());
 
-      emitSSE(userId, 'order-message', {
+      await emitSSE(userId, 'order-message', {
         orderId,
         message: rodMessage,
         source: 'outgoing',
@@ -1114,7 +1126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/events", isAuthenticated, (req, res) => {
+  app.get("/api/events", isAuthenticated, async (req, res) => {
     const userId = (req.user as any).id;
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -1123,6 +1135,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     (res as any).flushHeaders?.();
 
     res.write(`data: ${JSON.stringify({ event: "connected" })}\n\n`);
+
+    // Send any recent events from Redis (if PRODUCTION=true)
+    if (process.env.PRODUCTION === 'true') {
+      try {
+        const recentEvents = await getRecentSSEEvents(userId);
+        // Send events in reverse order (oldest first) so client processes them chronologically
+        for (const sseEvent of recentEvents.reverse()) {
+          const payload = `data: ${JSON.stringify({ event: sseEvent.event, data: sseEvent.data })}\n\n`;
+          res.write(payload);
+        }
+        if (recentEvents.length > 0) {
+          console.log(`[SSE] Sent ${recentEvents.length} recent events to userId ${userId}`);
+        }
+      } catch (error) {
+        console.error(`[SSE] Error sending recent events to userId ${userId}:`, error);
+      }
+    }
 
     const clients = sseClients.get(userId) ?? new Set<Response>();
     clients.add(res);
@@ -1242,7 +1271,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateOrderLastMessage(orderId, new Date());
 
       // Emit SSE event immediately so frontend sees the message right away
-      emitSSE(userId, 'order-message', {
+      await emitSSE(userId, 'order-message', {
         orderId,
         message,
         number: incomingNumber,
@@ -1275,7 +1304,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log('[SMS Reply] AI suggested response refreshed for incoming SMS');
 
                 // Emit SSE event again with AI suggestion
-                emitSSE(userId, 'order-message', {
+                await emitSSE(userId, 'order-message', {
                   orderId,
                   message,
                   number: incomingNumber,

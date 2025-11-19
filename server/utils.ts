@@ -7,7 +7,7 @@ import { IStorage } from "./storage.js";
 import { oauthTokens } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db.js";
-import { getRedisClient } from "./redis.js";
+import { getRedisClient, getRedisSubscriber } from "./redis.js";
 
 
 // Check if user is authenticated
@@ -250,6 +250,121 @@ export async function restoreOrderDetectionTimers(
     } catch (error) {
         console.error('[Order Detection Timer] Error restoring timers:', error);
     }
+}
+
+// SSE event management with Redis support
+interface SSEEvent {
+    event: string;
+    data: unknown;
+    timestamp: number;
+    instanceId?: string; // Used to prevent duplicate messages from same instance
+}
+
+// Generate a unique instance ID for this server process
+const INSTANCE_ID = `${process.pid}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+export async function emitSSEWithRedis(
+    userId: string,
+    event: string,
+    data: unknown,
+    sendToClients: (userId: string, payload: string) => void
+): Promise<void> {
+    const redis = getRedisClient();
+    const payload = `data: ${JSON.stringify({ event, data })}\n\n`;
+    const sseEvent: SSEEvent = { event, data, timestamp: Date.now(), instanceId: INSTANCE_ID };
+
+    // Send to local clients immediately
+    sendToClients(userId, payload);
+
+    // If PRODUCTION=true, also publish to Redis pub/sub and store recent events
+    if (redis) {
+        try {
+            // Publish to Redis pub/sub for other server instances
+            // Note: We include instanceId so other instances know it's from us
+            const channel = `sse:user:${userId}`;
+            await redis.publish(channel, JSON.stringify(sseEvent));
+            console.log(`[SSE] Published event to Redis channel ${channel} (instance: ${INSTANCE_ID})`);
+
+            // Store recent events (unlimited, expires at end of day)
+            // Store without instanceId to avoid filtering issues on reconnect
+            const recentEventForStorage: SSEEvent = { event, data, timestamp: Date.now() };
+            const recentEventsKey = `sse:recent:${userId}`;
+            await redis.lpush(recentEventsKey, JSON.stringify(recentEventForStorage));
+
+            // Calculate seconds until end of day (midnight)
+            const now = new Date();
+            const endOfDay = new Date(now);
+            endOfDay.setHours(23, 59, 59, 999); // Set to end of day
+            const secondsUntilMidnight = Math.ceil((endOfDay.getTime() - now.getTime()) / 1000);
+
+            // Set TTL to expire at end of day (or refresh if already set)
+            await redis.expire(recentEventsKey, secondsUntilMidnight);
+        } catch (error) {
+            console.error(`[SSE] Redis error for userId ${userId}:`, error);
+            // Continue even if Redis fails
+        }
+    }
+}
+
+export async function getRecentSSEEvents(userId: string): Promise<SSEEvent[]> {
+    const redis = getRedisClient();
+    if (!redis) {
+        return []; // No Redis, no recent events
+    }
+
+    try {
+        const recentEventsKey = `sse:recent:${userId}`;
+        const events = await redis.lrange(recentEventsKey, 0, -1); // Get all events (no limit)
+        return events.map(eventStr => JSON.parse(eventStr) as SSEEvent);
+    } catch (error) {
+        console.error(`[SSE] Error getting recent events for userId ${userId}:`, error);
+        return [];
+    }
+}
+
+export function setupRedisSSESubscription(
+    onEvent: (userId: string, event: string, data: unknown) => void
+): void {
+    const subscriber = getRedisSubscriber();
+    if (!subscriber) {
+        return; // No Redis, no subscription
+    }
+
+    // Subscribe to all user SSE channels using pattern matching
+    subscriber.psubscribe('sse:user:*');
+
+    subscriber.on('pmessage', (pattern, channel, message) => {
+        try {
+            // Extract userId from channel (format: sse:user:${userId})
+            const userId = channel.replace('sse:user:', '');
+            const sseEvent: SSEEvent = JSON.parse(message);
+
+            // Filter out messages from our own instance to prevent duplicates
+            // (We already sent to local clients when we published)
+            if (sseEvent.instanceId === INSTANCE_ID) {
+                console.log(`[SSE] Ignoring own message from Redis channel ${channel} (instance: ${INSTANCE_ID})`);
+                return;
+            }
+
+            console.log(`[SSE] Received event from Redis channel ${channel} for userId ${userId} (from instance: ${sseEvent.instanceId})`);
+
+            // Call the callback to send to local clients
+            // This is a message from another server instance
+            onEvent(userId, sseEvent.event, sseEvent.data);
+        } catch (error) {
+            console.error(`[SSE] Error processing Redis message from channel ${channel}:`, error);
+        }
+    });
+
+    // Handle reconnection - resubscribe to pattern if connection is lost
+    subscriber.on('ready', () => {
+        console.log(`[SSE] Redis subscriber ready, subscribing to pattern sse:user:*`);
+        subscriber.psubscribe('sse:user:*').catch((err) => {
+            console.error('[SSE] Error resubscribing to Redis pattern:', err);
+        });
+    });
+
+    console.log(`[SSE] Redis pub/sub subscription set up (instance: ${INSTANCE_ID})`);
 }
 
 // Clear menu items cache (works with both Redis and in-memory cache)
