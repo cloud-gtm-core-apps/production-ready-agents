@@ -9,7 +9,8 @@ import { setupVite, serveStatic, log } from "./vite.js";
 const app = express();
 
 // Trust proxy for production (needed if behind reverse proxy/load balancer)
-if (process.env.NODE_ENV === 'production') {
+// This must be set BEFORE session middleware
+if (process.env.NODE_ENV === 'production' || process.env.TRUST_PROXY === 'true') {
   app.set('trust proxy', 1);
 }
 
@@ -31,16 +32,28 @@ const PgSession = connectPgSimple(session);
 let sessionStore: connectPgSimple.PGStore | undefined;
 
 if (process.env.DATABASE_URL) {
-  // Use connection string directly - connect-pg-simple will create its own pg.Pool
-  sessionStore = new PgSession({
-    conString: process.env.DATABASE_URL,
-    tableName: 'session', // Table name for sessions
-    createTableIfMissing: true, // Automatically create the session table if it doesn't exist
-  });
-  
-  // Clean up expired sessions every hour
-  sessionStore.startInterval();
+  try {
+    // Use connection string directly - connect-pg-simple will create its own pg.Pool
+    sessionStore = new PgSession({
+      conString: process.env.DATABASE_URL,
+      tableName: 'session', // Table name for sessions
+      createTableIfMissing: true, // Automatically create the session table if it doesn't exist
+      pruneSessionInterval: 60, // Clean up expired sessions every 60 seconds (default)
+    });
+
+    // Note: In connect-pg-simple v10+, cleanup is automatic - no need to call startInterval()
+    log('PostgreSQL session store initialized');
+  } catch (error) {
+    log(`Warning: Failed to initialize PostgreSQL session store: ${error}`);
+  }
+} else {
+  log('Warning: DATABASE_URL not set, using in-memory session store (not recommended for production)');
 }
+
+// Determine if we should use secure cookies
+// Default to false in production (behind proxy) unless explicitly enabled
+// Secure cookies require HTTPS end-to-end, which may not be the case behind a proxy
+const useSecureCookies = process.env.SESSION_SECURE === 'true';
 
 // Session configuration
 export const sessionMiddleware = session({
@@ -48,12 +61,17 @@ export const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
+  name: 'connect.sid', // Explicitly set cookie name
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: useSecureCookies, // Only use secure in production if explicitly enabled
     httpOnly: true,
     sameSite: (process.env.SESSION_SAME_SITE as 'strict' | 'lax' | 'none' | undefined) || 'lax',
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-  }
+    // Don't set domain - let browser use default (current domain)
+    // path: '/' is default
+  },
+  // Ensure session is saved even if not modified
+  rolling: false,
 });
 
 app.use(sessionMiddleware);

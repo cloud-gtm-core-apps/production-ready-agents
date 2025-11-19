@@ -516,9 +516,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (err) {
           return next(err);
         }
-        // Don't send password in response
-        const { password: _, ...userWithoutPassword } = user;
-        res.status(201).json({ user: userWithoutPassword });
+        // Explicitly save session to ensure it's persisted
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Signup] Error saving session:', err);
+            return next(err);
+          }
+          // Don't send password in response
+          const { password: _, ...userWithoutPassword } = user;
+          res.status(201).json({ user: userWithoutPassword });
+        });
       });
     } catch (error) {
       next(error);
@@ -538,9 +545,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (err) {
           return next(err);
         }
-        // Don't send password in response
-        const { password: _, ...userWithoutPassword } = user;
-        res.json({ user: userWithoutPassword });
+        // Explicitly save session to ensure it's persisted
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Login] Error saving session:', err);
+            return next(err);
+          }
+          // Don't send password in response
+          const { password: _, ...userWithoutPassword } = user;
+          res.json({ user: userWithoutPassword });
+        });
       });
     })(req, res, next);
   });
