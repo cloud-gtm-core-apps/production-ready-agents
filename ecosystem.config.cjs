@@ -1,9 +1,11 @@
+const path = require('path');
+
 module.exports = {
     apps: [{
         name: 'api',
         interpreter: 'node',
-        script: './node_modules/.bin/tsx',
-        args: 'server/dist/server/index.js',
+        script: path.join(__dirname, 'node_modules', '.bin', 'tsx'),
+        args: path.join(__dirname, 'server', 'dist', 'server', 'index.js'),
         instances: 1,
         exec_mode: 'fork',
         env: {
