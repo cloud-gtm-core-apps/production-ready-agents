@@ -29,8 +29,8 @@ export default function MessageBubble({ text, isOutgoing = false, timestamp, isA
           </div>
         )}
         <p className={cn(
-          "text-sm sm:text-base",
-          isAIOrganized ? "whitespace-pre-line leading-6 sm:leading-7" : "leading-relaxed"
+          "text-sm sm:text-base whitespace-pre-line",
+          isAIOrganized ? "leading-6 sm:leading-7" : "leading-relaxed"
         )}>{text}</p>
       </div>
       {timestamp && (
