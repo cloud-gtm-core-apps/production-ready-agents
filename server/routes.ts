@@ -7,12 +7,12 @@ import { insertUserSchema, type Message, type MenuItem } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { db } from "./db.js";
 import { eq, and } from "drizzle-orm";
-import { users, oauthTokens, menuItemPopularityAggregates, orders } from "@shared/schema";
+import { users, oauthTokens, menuItemPopularityAggregates, orders, menuItems } from "@shared/schema";
 import { isAuthenticated } from "./utils.js";
-import { encrypt, decrypt, getMenuItemsWithCache, clearMenuItemsCache, setOrderDetectionTimer, clearOrderDetectionTimer, emitSSEWithRedis, getRecentSSEEvents, setupRedisSSESubscription, formatOrderMessage, generateRandomName, generateRandomPhoneNumber, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
-import { openai } from "./clients.js";
-import { sseClients, aiSuggestedResponses } from "./globals.js";
+import { encrypt, getMenuItemsWithCache, clearMenuItemsCache, setOrderDetectionTimer, clearOrderDetectionTimer, emitSSEWithRedis, getRecentSSEEvents, setupRedisSSESubscription, formatOrderMessage, processCustomerOrder, updateOrderFromDetails, createCloverOrder, updateCloverOrder } from "./utils.js";
+import { sseClients, aiSuggestedResponses, twilioOptInCache } from "./globals.js";
 import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, generateAISuggestedResponse } from "./aiFunctions.js";
+import { getRedisClient } from "./redis.js";
 const MESSAGING_SERVICE_URL = "https://macgateway.ngrok.app/send";
 
 async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
@@ -62,6 +62,48 @@ async function sendMessageThroughRelay(to: string, message: string): Promise<voi
 }
 
 const INITIAL_TEST_GREETING = "Corn On The Corner, This is our storefront location: 1041 Howard st, Dearborn, MI 48124. Please text your order including a name and confirm the given pick up time. Thank you.";
+
+// Twilio Campaign Opt-In Management Functions
+type OptInStatus = 'opted-in' | 'pending' | 'opted-out';
+
+async function getOptInStatus(phoneNumber: string): Promise<OptInStatus | undefined> {
+  const redis = getRedisClient();
+  const cacheKey = `twilio:optin:${phoneNumber}`;
+
+  // Try Redis first if available
+  if (redis) {
+    try {
+      const status = await redis.get(cacheKey);
+      if (status) {
+        return status as OptInStatus;
+      }
+    } catch (error) {
+      console.error(`[Twilio Opt-In] Redis get error for ${phoneNumber}:`, error);
+    }
+  }
+
+  // Fallback to in-memory cache
+  return twilioOptInCache.get(phoneNumber);
+}
+
+async function setOptInStatus(phoneNumber: string, status: OptInStatus): Promise<void> {
+  const redis = getRedisClient();
+  const cacheKey = `twilio:optin:${phoneNumber}`;
+
+  // Store in Redis if available (with long TTL - 1 year for compliance)
+  if (redis) {
+    try {
+      // Store with TTL of 1 year (31536000 seconds)
+      await redis.setex(cacheKey, 31536000, status);
+      console.log(`[Twilio Opt-In] Stored status '${status}' in Redis for ${phoneNumber}`);
+    } catch (error) {
+      console.error(`[Twilio Opt-In] Redis set error for ${phoneNumber}:`, error);
+    }
+  }
+
+  // Also store in in-memory cache as fallback
+  twilioOptInCache.set(phoneNumber, status);
+}
 
 // Helper function to send SSE payload to local clients
 function sendSSEToClients(userId: string, payload: string) {
@@ -620,13 +662,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Create menu item
   app.post("/api/menu-items", isAuthenticated, async (req, res, next) => {
+    const userId = (req.user as any).id;
     try {
-      const userId = (req.user as any).id;
       const result = await storage.createMenuItem(userId, req.body);
       res.status(201).json(result);
     } catch (error: any) {
-      // Return user-friendly error message for duplicate items
+      // Make endpoint idempotent: if item already exists, return the existing item
       if (error.message && error.message.includes('already exists')) {
+        // Query for the existing menu item
+        const existingItems = await db.select()
+          .from(menuItems)
+          .where(and(
+            eq(menuItems.userId, userId),
+            eq(menuItems.name, req.body.name)
+          ))
+          .limit(1);
+
+        if (existingItems.length > 0) {
+          return res.status(200).json(existingItems[0]);
+        }
+        // Fallback to error if item not found (shouldn't happen)
         return res.status(400).json({ message: error.message });
       }
       next(error);
@@ -792,8 +847,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         try {
           if (order.number) {
-            await sendMessageThroughRelay(order.number, confirmationMessage.text);
-            console.log(`[Send to Preparation] Sent confirmation message via messaging service to ${order.number}`);
+            // Check opt-in status if Twilio Campaign is enabled
+            const isTwilioCampaign = process.env.TWILIO_CAMPAIGN === 'true';
+            if (isTwilioCampaign) {
+              const optInStatus = await getOptInStatus(order.number);
+              if (optInStatus !== 'opted-in') {
+                console.log(`[Send to Preparation] Skipping confirmation message - customer ${order.number} opt-in status: ${optInStatus}`);
+              } else {
+                await sendMessageThroughRelay(order.number, confirmationMessage.text);
+                console.log(`[Send to Preparation] Sent confirmation message via messaging service to ${order.number}`);
+              }
+            } else {
+              await sendMessageThroughRelay(order.number, confirmationMessage.text);
+              console.log(`[Send to Preparation] Sent confirmation message via messaging service to ${order.number}`);
+            }
           } else {
             console.warn(`[Send to Preparation] Order ${orderId} is missing a contact number; skipping messaging service send.`);
           }
@@ -872,8 +939,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         try {
           if (order.number) {
-            await sendMessageThroughRelay(order.number, readyMessage.text);
-            console.log(`[Mark Ready] Sent ready message via messaging service to ${order.number}`);
+            // Check opt-in status if Twilio Campaign is enabled
+            const isTwilioCampaign = process.env.TWILIO_CAMPAIGN === 'true';
+            if (isTwilioCampaign) {
+              const optInStatus = await getOptInStatus(order.number);
+              if (optInStatus !== 'opted-in') {
+                console.log(`[Mark Ready] Skipping ready message - customer ${order.number} opt-in status: ${optInStatus}`);
+              } else {
+                await sendMessageThroughRelay(order.number, readyMessage.text);
+                console.log(`[Mark Ready] Sent ready message via messaging service to ${order.number}`);
+              }
+            } else {
+              await sendMessageThroughRelay(order.number, readyMessage.text);
+              console.log(`[Mark Ready] Sent ready message via messaging service to ${order.number}`);
+            }
           } else {
             console.warn(`[Mark Ready] Order ${orderId} is missing a contact number; skipping messaging service send.`);
           }
@@ -979,6 +1058,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get opt-in status for an order
+  app.get("/api/orders/:orderId/opt-in-status", isAuthenticated, async (req, res, next) => {
+    try {
+      const { orderId } = req.params;
+      const userId = (req.user as any).id;
+
+      // Check if Twilio Campaign is enabled
+      const isTwilioCampaign = process.env.TWILIO_CAMPAIGN === 'true';
+      if (!isTwilioCampaign) {
+        return res.json({
+          twilioCampaignEnabled: false,
+          optInStatus: null
+        });
+      }
+
+      // Get the order to find the phone number
+      const order = await storage.getOrderById(userId, orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      if (!order.number) {
+        return res.json({
+          twilioCampaignEnabled: true,
+          optInStatus: null
+        });
+      }
+
+      const optInStatus = await getOptInStatus(order.number);
+      return res.json({
+        twilioCampaignEnabled: true,
+        optInStatus: optInStatus || null
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Send a message to an order conversation
   app.post("/api/orders/:orderId/message", isAuthenticated, async (req, res, next) => {
     try {
@@ -1002,6 +1119,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!order.number) {
         return res.status(400).json({ message: 'Order does not have a contact number' });
+      }
+
+      // Check opt-in status if Twilio Campaign is enabled
+      const isTwilioCampaign = process.env.TWILIO_CAMPAIGN === 'true';
+      if (isTwilioCampaign) {
+        const optInStatus = await getOptInStatus(order.number);
+        if (optInStatus !== 'opted-in') {
+          return res.status(403).json({
+            message: optInStatus === 'opted-out'
+              ? 'Customer has opted out. Messages cannot be sent.'
+              : 'Customer has not opted in. Messages cannot be sent.'
+          });
+        }
       }
 
       try {
@@ -1192,6 +1322,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
+      // Create message object first
       const message: Message = {
         id: randomUUID(),
         text: messageText,
@@ -1199,6 +1330,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
         timestamp: new Date().toISOString(),
       };
 
+      // Check if Twilio Campaign mode is enabled
+      const isTwilioCampaign = process.env.TWILIO_CAMPAIGN === 'true';
+
+      // Handle Twilio Campaign opt-in flow keywords BEFORE creating/getting order
+      let shouldProcessNormally = true;
+      let confirmationMessage: string | null = null;
+      let shouldSendOptInReminder = false;
+
+      if (isTwilioCampaign) {
+        const optInStatus = await getOptInStatus(incomingNumber);
+        const upperMessage = messageText.toUpperCase().trim();
+
+        // Handle STOP keyword (always processed first)
+        if (upperMessage === 'STOP') {
+          await setOptInStatus(incomingNumber, 'opted-out');
+          console.log(`[Twilio Campaign] ${incomingNumber} opted out`);
+          shouldProcessNormally = false; // Don't process through normal flow, but still save message
+        }
+        // Handle ORDER keyword (initial opt-in request)
+        else if (upperMessage === 'ORDER') {
+          await setOptInStatus(incomingNumber, 'pending');
+          confirmationMessage = "OrderBot: Reply YES to confirm you want to place orders & receive order confirmations/replies via text from OrderBot. Msg&Data rates may apply. Reply STOP to unsubscribe.";
+          shouldProcessNormally = false; // Don't process through normal flow, but still save message
+        }
+        // Handle YES/Y confirmation (must be in pending state)
+        else if ((upperMessage === 'YES' || upperMessage === 'Y') && optInStatus === 'pending') {
+          await setOptInStatus(incomingNumber, 'opted-in');
+          console.log(`[Twilio Campaign] ${incomingNumber} confirmed opt-in`);
+          shouldProcessNormally = true; // Now they can proceed with normal flow
+        }
+        // User has opted out - ignore the message
+        else if (optInStatus === 'opted-out') {
+          console.log(`[Twilio Campaign] Ignoring message from opted-out user ${incomingNumber}`);
+          res.status(200).type('text/xml').send('<Response></Response>');
+          return; // Don't save or emit SSE for opted-out users
+        }
+        // User is in pending state but didn't send YES/Y
+        else if (optInStatus === 'pending') {
+          console.log(`[Twilio Campaign] Ignoring message from ${incomingNumber} - still pending opt-in confirmation`);
+          shouldProcessNormally = false; // Don't process through normal flow, but still save message
+          shouldSendOptInReminder = true; // Send reminder to reply YES
+        }
+        // If status is not opted-in and not pending, user hasn't started opt-in process
+        else if (optInStatus !== 'opted-in') {
+          console.log(`[Twilio Campaign] Ignoring message from ${incomingNumber} - not opted in`);
+          shouldProcessNormally = false; // Don't process through normal flow, but still save message
+        }
+      }
+
+      // Find or create order first (we need this for saving messages and emitting SSE)
+      // We ALWAYS create/get order and save message, even for opt-in flow messages
       const existingOrder = await db.select().from(orders).where(eq(orders.number, incomingNumber)).limit(1);
 
       let userId: string;
@@ -1210,31 +1392,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId = order.userId;
         orderId = order.id;
 
-        // Check if order is from a previous day (older than today)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const orderLastMessage = order.lastMessage ? new Date(order.lastMessage) : null;
-        const isOldOrder = orderLastMessage && orderLastMessage < today;
+        // Only reset order status if we're processing normally (not opt-in flow)
+        if (shouldProcessNormally) {
+          // Check if order is from a previous day (older than today)
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const orderLastMessage = order.lastMessage ? new Date(order.lastMessage) : null;
+          const isOldOrder = orderLastMessage && orderLastMessage < today;
 
-        // If order is completed OR if it's an old order (from yesterday or earlier), reset it to New status
-        if (order.status === 'Completed' || isOldOrder) {
-          const reason = order.status === 'Completed' ? 'completed' : 'old order from previous day';
-          console.log(`[SMS Reply] Resetting ${reason} order ${orderId} to New status for phone number ${incomingNumber}`);
+          // If order is completed OR if it's an old order (from yesterday or earlier), reset it to New status
+          if (order.status === 'Completed' || isOldOrder) {
+            const reason = order.status === 'Completed' ? 'completed' : 'old order from previous day';
+            console.log(`[SMS Reply] Resetting ${reason} order ${orderId} to New status for phone number ${incomingNumber}`);
 
-          await storage.updateOrderStatus(orderId, 'New');
-          await storage.updateOrderMade(orderId, false);
-          await storage.updatePickupTimeDetected(orderId, false);
+            await storage.updateOrderStatus(orderId, 'New');
+            await storage.updateOrderMade(orderId, false);
+            await storage.updatePickupTimeDetected(orderId, false);
 
-          // Reset order details to start fresh
-          await storage.updateOrderDetails(orderId, {
-            items: [],
-            orderPrice: '0.00',
-            notes: '',
-          });
-          // Reset pickupTime to null explicitly
-          await db.update(orders)
-            .set({ pickupTime: null })
-            .where(eq(orders.id, orderId));
+            // Reset order details to start fresh
+            await storage.updateOrderDetails(orderId, {
+              items: [],
+              orderPrice: '0.00',
+              notes: '',
+            });
+            // Reset pickupTime to null explicitly
+            await db.update(orders)
+              .set({ pickupTime: null })
+              .where(eq(orders.id, orderId));
+          }
         }
       } else {
         const existingUser = await db.select().from(users).limit(1);
@@ -1267,10 +1452,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Save message immediately - this is the critical path
+      // We ALWAYS save the message, even for opt-in flow messages
       await storage.addMessageToOrder(userId, orderId, message);
       await storage.updateOrderLastMessage(orderId, new Date());
 
       // Emit SSE event immediately so frontend sees the message right away
+      // We ALWAYS emit SSE, even for opt-in flow messages
       await emitSSE(userId, 'order-message', {
         orderId,
         message,
@@ -1280,52 +1467,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
         aiSuggestedResponse: null, // Will be updated asynchronously
       });
 
+      // Send confirmation message if needed (for ORDER keyword)
+      if (confirmationMessage) {
+        (async () => {
+          try {
+            // Send via SMS
+            await sendMessageThroughRelay(incomingNumber, confirmationMessage);
+            console.log(`[Twilio Campaign] Sent confirmation message to ${incomingNumber}`);
+
+            // Save confirmation message to database as restaurant message (isOutgoing: false)
+            const confirmationMsg: Message = {
+              id: randomUUID(),
+              text: confirmationMessage,
+              isOutgoing: false, // false = restaurant messages (Rod's messages)
+              timestamp: new Date().toISOString(),
+            };
+            await storage.addMessageToOrder(userId, orderId, confirmationMsg);
+            await storage.updateOrderLastMessage(orderId, new Date());
+
+            // Emit SSE event so frontend sees the confirmation message
+            await emitSSE(userId, 'order-message', {
+              orderId,
+              message: confirmationMsg,
+              number: incomingNumber,
+              source: 'outgoing',
+              aiSuggestedResponse: null,
+            });
+          } catch (error) {
+            console.error(`[Twilio Campaign] Failed to send confirmation message to ${incomingNumber}:`, error);
+          }
+        })();
+      }
+
+      // Send opt-in reminder if user is in pending state and sent a message
+      if (shouldSendOptInReminder) {
+        (async () => {
+          try {
+            const reminderMessage = "Please reply YES to confirm you want to place orders and receive order confirmations via text. Reply STOP to unsubscribe.";
+
+            // Send via SMS
+            await sendMessageThroughRelay(incomingNumber, reminderMessage);
+            console.log(`[Twilio Campaign] Sent opt-in reminder to ${incomingNumber}`);
+
+            // Save reminder message to database as restaurant message (isOutgoing: false)
+            const reminderMsg: Message = {
+              id: randomUUID(),
+              text: reminderMessage,
+              isOutgoing: false, // false = restaurant messages (Rod's messages)
+              timestamp: new Date().toISOString(),
+            };
+            await storage.addMessageToOrder(userId, orderId, reminderMsg);
+            await storage.updateOrderLastMessage(orderId, new Date());
+
+            // Emit SSE event so frontend sees the reminder message
+            await emitSSE(userId, 'order-message', {
+              orderId,
+              message: reminderMsg,
+              number: incomingNumber,
+              source: 'outgoing',
+              aiSuggestedResponse: null,
+            });
+          } catch (error) {
+            console.error(`[Twilio Campaign] Failed to send opt-in reminder to ${incomingNumber}:`, error);
+          }
+        })();
+      }
+
       // Send response immediately to prevent webhook timeouts and retries
       res.status(200).type('text/xml').send('<Response></Response>');
 
       // Process everything else asynchronously (fire and forget) to avoid blocking
       // This ensures messages are never stuck in queue
-      (async () => {
-        try {
-          // Trigger order detection (non-blocking)
-          await triggerDebouncedOrderDetection(userId, orderId);
-
-          // Generate AI suggestion asynchronously
-          let aiSuggestion: string | null = null;
+      // Only process normal order flow if shouldProcessNormally is true (opted-in users)
+      if (shouldProcessNormally) {
+        (async () => {
           try {
-            const conversation = await storage.getOrderConversation(userId, orderId);
-            if (conversation) {
-              const allMessages = (conversation.messages as Message[]) || [];
-              aiSuggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
+            // Trigger order detection (non-blocking)
+            await triggerDebouncedOrderDetection(userId, orderId);
 
-              if (aiSuggestion && aiSuggestion.trim()) {
-                aiSuggestion = aiSuggestion.trim();
-                aiSuggestedResponses.set(orderId, aiSuggestion);
-                console.log('[SMS Reply] AI suggested response refreshed for incoming SMS');
+            // Generate AI suggestion asynchronously
+            let aiSuggestion: string | null = null;
+            try {
+              const conversation = await storage.getOrderConversation(userId, orderId);
+              if (conversation) {
+                const allMessages = (conversation.messages as Message[]) || [];
+                aiSuggestion = await generateAISuggestedResponse(allMessages, userId, orderId);
 
-                // Emit SSE event again with AI suggestion
-                await emitSSE(userId, 'order-message', {
-                  orderId,
-                  message,
-                  number: incomingNumber,
-                  source: 'incoming',
-                  isNewOrder,
-                  aiSuggestedResponse: aiSuggestion,
-                });
+                if (aiSuggestion && aiSuggestion.trim()) {
+                  aiSuggestion = aiSuggestion.trim();
+                  aiSuggestedResponses.set(orderId, aiSuggestion);
+                  console.log('[SMS Reply] AI suggested response refreshed for incoming SMS');
+
+                  // Emit SSE event again with AI suggestion
+                  await emitSSE(userId, 'order-message', {
+                    orderId,
+                    message,
+                    number: incomingNumber,
+                    source: 'incoming',
+                    isNewOrder,
+                    aiSuggestedResponse: aiSuggestion,
+                  });
+                } else {
+                  aiSuggestedResponses.delete(orderId);
+                }
               } else {
                 aiSuggestedResponses.delete(orderId);
               }
-            } else {
+            } catch (error) {
               aiSuggestedResponses.delete(orderId);
+              console.error('[SMS Reply] Error refreshing AI suggested response:', error);
             }
           } catch (error) {
-            aiSuggestedResponses.delete(orderId);
-            console.error('[SMS Reply] Error refreshing AI suggested response:', error);
+            console.error('[SMS Reply] Error in async processing:', error);
           }
-        } catch (error) {
-          console.error('[SMS Reply] Error in async processing:', error);
-        }
-      })();
+        })();
+      }
     } catch (error) {
       console.error('[SMS Reply] Error handling incoming SMS:', error);
       res

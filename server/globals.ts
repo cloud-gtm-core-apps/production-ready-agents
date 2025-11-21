@@ -16,3 +16,7 @@ export const sseClients = new Map<string, Set<Response>>();
 
 // Cache for latest AI suggested responses per order
 export const aiSuggestedResponses = new Map<string, string>();
+
+// Cache for Twilio campaign opt-in status by phone number
+// Values: 'opted-in' | 'pending' | 'opted-out' | undefined (no status)
+export const twilioOptInCache = new Map<string, 'opted-in' | 'pending' | 'opted-out'>();

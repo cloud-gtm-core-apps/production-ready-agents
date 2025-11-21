@@ -2,6 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Phone, Info, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import MessageBubble from './MessageBubble';
 import IOSStatusBar from './IOSStatusBar';
 import QuickReplyTemplates from './QuickReplyTemplates';
@@ -128,6 +138,8 @@ export default function ConversationView({
   const [isSending, setIsSending] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
   const [initialOrderDetails, setInitialOrderDetails] = useState<OrderDetails | null>(null);
+  const [showOptInAlert, setShowOptInAlert] = useState(false);
+  const [optInStatus, setOptInStatus] = useState<{ twilioCampaignEnabled: boolean; optInStatus: 'opted-in' | 'pending' | 'opted-out' | null } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastCustomerMessageIdRef = useRef<string | null>(null);
@@ -141,7 +153,52 @@ export default function ConversationView({
     // It will be set properly in the next useEffect when conversation.orderDetails is available
     setInitialOrderDetails(null);
     setAiOrderDetails(null);
+    // Reset opt-in status when conversation changes
+    setOptInStatus(null);
   }, [conversation.id]);
+
+  // Fetch opt-in status when conversation changes or new messages arrive
+  useEffect(() => {
+    const fetchOptInStatus = async () => {
+      try {
+        const response = await fetch(`/api/orders/${conversation.id}/opt-in-status`);
+        if (response.ok) {
+          const data = await response.json();
+          setOptInStatus(data);
+        }
+      } catch (error) {
+        console.error('Error fetching opt-in status:', error);
+      }
+    };
+
+    void fetchOptInStatus();
+  }, [conversation.id, conversation.messages.length]); // Also refresh when messages change
+
+  // Refresh opt-in status when we see a YES message (customer just opted in)
+  useEffect(() => {
+    const lastMessage = conversation.messages[conversation.messages.length - 1];
+    if (lastMessage && lastMessage.isOutgoing) {
+      const upperText = lastMessage.text.toUpperCase().trim();
+      if (upperText === 'YES' || upperText === 'Y') {
+        // Refresh opt-in status after a delay to allow backend to update
+        const timer = setTimeout(() => {
+          const fetchOptInStatus = async () => {
+            try {
+              const response = await fetch(`/api/orders/${conversation.id}/opt-in-status`);
+              if (response.ok) {
+                const data = await response.json();
+                setOptInStatus(data);
+              }
+            } catch (error) {
+              console.error('Error fetching opt-in status:', error);
+            }
+          };
+          void fetchOptInStatus();
+        }, 1000); // Increased delay to ensure backend has processed
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [conversation.id, conversation.messages]);
 
   useEffect(() => {
     if (conversation.aiSuggestedResponse) {
@@ -285,6 +342,26 @@ export default function ConversationView({
     }
 
     const text = messageInput.trim();
+
+    // Only check opt-in status if Twilio Campaign is enabled and we have status data
+    // Allow sending if status is null (still loading) or if campaign is disabled
+    if (optInStatus?.twilioCampaignEnabled) {
+      // If status is null or not opted-in, show alert
+      if (!optInStatus.optInStatus || optInStatus.optInStatus !== 'opted-in') {
+        // Show alert dialog to inform user
+        setShowOptInAlert(true);
+        return;
+      }
+    }
+
+    await sendMessage(text);
+  };
+
+  const sendMessage = async (text: string) => {
+    if (!onSendMessage) {
+      return;
+    }
+
     const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const optimisticEntry: OptimisticMessage = {
       id: optimisticId,
@@ -314,6 +391,7 @@ export default function ConversationView({
       setIsSending(false);
     }
   };
+
 
   const handleKeyPress = (event: React.KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -592,6 +670,27 @@ export default function ConversationView({
       </div>
 
       <div className="h-2 sm:h-8 bg-transparent" />
+
+      <AlertDialog open={showOptInAlert} onOpenChange={setShowOptInAlert}>
+        <AlertDialogContent className="max-w-[280px] p-4">
+          <AlertDialogHeader className="pb-2">
+            <AlertDialogTitle className="text-base">Cannot Send Message</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs leading-relaxed">
+              {optInStatus?.optInStatus === 'opted-out' 
+                ? 'This customer has opted out. Messages cannot be sent.'
+                : 'This customer has not completed the opt-in process. They must reply YES to receive messages.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-2 pt-2">
+            <AlertDialogCancel 
+              className="m-0 flex-1 text-xs h-8"
+              onClick={() => setShowOptInAlert(false)}
+            >
+              OK
+            </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
