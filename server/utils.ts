@@ -387,7 +387,33 @@ export async function clearMenuItemsCache(userId: string): Promise<void> {
 }
 
 // Convert relative time strings to absolute times
-export function convertRelativeTimeToAbsolute(timeStr: string, baseTime: Date = new Date()): string | null {
+export async function convertRelativeTimeToAbsolute(timeStr: string, baseTime?: Date): Promise<string | null> {
+    const { getRestaurantDateTimeComponents, getCurrentRestaurantTimeString } = await import("./timezone.js");
+
+    // If baseTime not provided, get current time in restaurant timezone
+    let restaurantBaseTime: Date;
+    if (!baseTime) {
+        const components = getRestaurantDateTimeComponents();
+        restaurantBaseTime = new Date(
+            components.year,
+            components.month,
+            components.day,
+            components.hours,
+            components.minutes,
+            components.seconds
+        );
+    } else {
+        // Convert baseTime to restaurant timezone representation
+        const components = getRestaurantDateTimeComponents(baseTime);
+        restaurantBaseTime = new Date(
+            components.year,
+            components.month,
+            components.day,
+            components.hours,
+            components.minutes,
+            components.seconds
+        );
+    }
     const normalized = timeStr.toLowerCase().trim();
 
     // Check if it's already an absolute time format (contains AM/PM or : pattern)
@@ -410,7 +436,7 @@ export function convertRelativeTimeToAbsolute(timeStr: string, baseTime: Date = 
     const hourMatch = normalized.match(/(\d+)\s*hour/i) || normalized.match(/half\s*an?\s*hour/i);
     const minuteMatch = normalized.match(/(\d+)\s*min(?:ute)?s?/i);
 
-    const resultTime = new Date(baseTime);
+    const resultTime = new Date(restaurantBaseTime);
 
     if (hourMatch) {
         const hours = normalized.includes('half') ? 0.5 : parseInt(hourMatch[1] || '0');
@@ -905,11 +931,17 @@ export async function processCustomerOrder(
     return customer;
 }
 
-function parsePickupTime(pickupTime?: string | Date): Date | null {
+async function parsePickupTime(pickupTime?: string | Date): Promise<Date | null> {
     if (!pickupTime) return null;
 
     try {
         if (typeof pickupTime === 'string' && pickupTime.match(/\d{1,2}:\d{2}\s*(AM|PM)/i)) {
+            const { parseTimeInRestaurantTimezone } = await import("./timezone.js");
+            const parsed = parseTimeInRestaurantTimezone(pickupTime);
+            if (parsed) {
+                return parsed;
+            }
+            // Fallback to old method if parsing fails
             const timeMatch = pickupTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
             if (timeMatch) {
                 let hours = parseInt(timeMatch[1], 10);
@@ -919,8 +951,9 @@ function parsePickupTime(pickupTime?: string | Date): Date | null {
                 if (period === 'PM' && hours !== 12) hours += 12;
                 if (period === 'AM' && hours === 12) hours = 0;
 
-                const now = new Date();
-                return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
+                const { getRestaurantDateTimeComponents } = await import("./timezone.js");
+                const components = getRestaurantDateTimeComponents();
+                return new Date(components.year, components.month, components.day, hours, minutes);
             } else {
                 return new Date(pickupTime);
             }
@@ -965,11 +998,28 @@ export async function updateOrderFromDetails(
         updateData.notes = orderDetails.notes || null;
     }
 
-    if (orderDetails?.pickupTime) {
-        const pickupTime = parsePickupTime(orderDetails.pickupTime);
-        if (pickupTime) {
-            updateData.pickupTime = pickupTime;
+    // Store pickup time string in notes field (append to existing notes if any)
+    // Format: "PICKUP_TIME: 10:00 PM" - we'll extract this when reading
+    if (orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string') {
+        const pickupTimeStr = orderDetails.pickupTime.trim();
+        if (pickupTimeStr.match(/\d{1,2}:\d{2}\s*(AM|PM)/i)) {
+            // Get existing notes (from orderDetails or fetch from DB if needed)
+            let existingNotes = (orderDetails.notes || '').toString();
+            // Remove any previous PICKUP_TIME entry
+            existingNotes = existingNotes.replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim();
+
+            // Append pickup time to notes (at the end, separated by newline)
+            const separator = existingNotes ? '\n\n' : '';
+            const newNotes = existingNotes + separator + `PICKUP_TIME: ${pickupTimeStr}`;
+            updateData.notes = newNotes;
         }
+    }
+
+    // Handle notes update separately (if notes provided but no pickup time)
+    if (orderDetails?.notes !== undefined && !(orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string')) {
+        // If no pickup time but notes are provided, still update notes (remove old PICKUP_TIME if any)
+        let cleanedNotes = (orderDetails.notes || '').toString().replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim();
+        updateData.notes = cleanedNotes || null;
     }
 
     if (Object.keys(updateData).length > 0) {
@@ -1058,7 +1108,7 @@ export async function updateCloverOrder(
         let clientCreatedTime = Date.now();
         const pickupTime = orderDetails?.pickupTime || order.pickupTime;
         if (pickupTime) {
-            const parsedPickupTime = parsePickupTime(pickupTime);
+            const parsedPickupTime = await parsePickupTime(pickupTime);
             if (parsedPickupTime) {
                 clientCreatedTime = parsedPickupTime.getTime();
             }

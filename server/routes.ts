@@ -275,7 +275,7 @@ export async function checkForOrderDetection(
           orderDetails: summaryResult.orderDetails ? { ...summaryResult.orderDetails } : undefined,
         };
 
-        const detectedPickupTime = detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+        const detectedPickupTime = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
         if (analysis.orderDetails) {
           if (!analysis.orderDetails.customerName) {
             analysis.orderDetails.customerName = order.firstName || order.number || "Customer";
@@ -479,11 +479,13 @@ export async function checkForOrderDetection(
                   total?: string;
                 } = {
                   items: orderDetails.items,
-                  pickupTime: orderDetails.pickupTime,
+                  pickupTime: orderDetails.pickupTime, // This will be stored in notes by updateOrderFromDetails
                   total: derivedTotal,
                 };
 
-                if (orderDetails.notes !== undefined) {
+                // Notes will be handled in updateOrderFromDetails (it will append pickup time to notes)
+                // Only set notes if pickupTime is not present (to avoid conflicts)
+                if (orderDetails.notes !== undefined && !orderDetails.pickupTime) {
                   updatePayload.notes = orderDetails.notes ?? null;
                 }
 
@@ -777,10 +779,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             messages: formattedMessages,
             orderDetails: order.orderPrice ? {
               items: order.items || [],
-              pickupTime: order.pickupTime ? new Date(order.pickupTime).toISOString() : null, // Keep as ISO string
+              // Extract pickup time string from notes (format: "PICKUP_TIME: 10:00 PM")
+              pickupTime: (() => {
+                if (order.notes) {
+                  const match = order.notes.match(/PICKUP_TIME:\s*([\d:]+?\s*(AM|PM))/i);
+                  if (match) {
+                    return match[1].trim();
+                  }
+                }
+                // Fallback: if stored as Date, convert to string (but this shouldn't happen)
+                if (order.pickupTime) {
+                  return new Date(order.pickupTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                }
+                return null;
+              })(),
               pickupTimestamp: order.pickupTime ? new Date(order.pickupTime).getTime() : null, // Keep as timestamp number
               total: order.orderPrice,
-              notes: order.notes || ''
+              notes: order.notes ? order.notes.replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim() : '' // Remove pickup time from notes display
             } : undefined,
             aiSuggestedResponse: aiSuggestedResponses.get(order.id) ?? undefined,
           };
@@ -820,13 +835,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let formattedTime = 'a later time today';
 
-      if (order.pickupTime) {
-        const pickupTime = new Date(order.pickupTime);
-        const hours = pickupTime.getHours();
-        const minutes = pickupTime.getMinutes();
-        const ampm = hours >= 12 ? 'PM' : 'AM';
-        const hours12 = hours % 12 || 12;
-        formattedTime = `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      // Use pickup time from orderDetails (it's already a string like "10:00 PM")
+      if (orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string') {
+        formattedTime = orderDetails.pickupTime.trim();
+      } else if (order.pickupTime) {
+        // Fallback: if stored as Date, convert to string
+        const { formatRestaurantTime } = await import("./timezone.js");
+        formattedTime = formatRestaurantTime(new Date(order.pickupTime));
       }
 
       // 6. Send confirmation message to customer
@@ -1229,7 +1244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const messages = (conversation.messages as Message[]) || [];
       const menuItems = await getMenuItemsWithCache(userId);
       const summaryResult = await analyzeOrderSummaryFromConversation(messages, order.firstName || undefined, menuItems);
-      const pickupTimeFromConversation = detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+      const pickupTimeFromConversation = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
 
       if (!summaryResult.orderMade || !summaryResult.orderDetails) {
         return res.json({ orderMade: false, summary: null, details: summaryResult.orderDetails ?? null });

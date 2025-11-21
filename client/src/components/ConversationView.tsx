@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { EditableOrderSummaryRef } from './EditableOrderSummary';
 import { ArrowLeft, Phone, Info, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -146,6 +147,7 @@ export default function ConversationView({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const suggestionRef = useRef<HTMLDivElement>(null);
   const [suggestionHeight, setSuggestionHeight] = useState<number>(0);
+  const orderSummaryRef = useRef<EditableOrderSummaryRef>(null);
 
   useEffect(() => {
     setAiSuggestedResponse(conversation.aiSuggestedResponse ?? null);
@@ -409,7 +411,14 @@ export default function ConversationView({
   };
 
   const handleConfirmOrder = () => {
-    setAutoStartEditing(true);
+    // If form is already expanded (editing), trigger save with confirmation (send to preparation)
+    if (orderSummaryRef.current?.isEditing) {
+      // Trigger save with confirmation dialog which will send to preparation
+      orderSummaryRef.current.triggerSaveWithConfirmation();
+    } else {
+      // Otherwise, expand the form
+      setAutoStartEditing(true);
+    }
   };
 
   const handleSaveOrder = (updatedDetails: OrderDetails) => {
@@ -535,6 +544,7 @@ export default function ConversationView({
       {orderDetailsToDisplay && (
         <div className="px-3 sm:px-4 pb-2 sm:pb-3 max-h-[60vh] overflow-y-auto">
           <EditableOrderSummary
+            ref={orderSummaryRef}
             orderDetails={orderDetailsToDisplay}
             orderStatus={normalizedOrderStatus}
             detectedPickupTime={detectedPickupTime}

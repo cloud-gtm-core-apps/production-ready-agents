@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,7 +28,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { Plus, Minus, X, Edit2, ArrowRight, XCircle, ChevronDown } from 'lucide-react';
+import { Plus, Minus, X, Edit2, XCircle, ChevronDown } from 'lucide-react';
 import type { OrderDetails, MenuItem } from '@shared/schema';
 
 interface EditableOrderSummaryProps {
@@ -43,13 +43,19 @@ interface EditableOrderSummaryProps {
   pickupTimeFromAI?: string;
 }
 
+export interface EditableOrderSummaryRef {
+  saveChanges: () => void;
+  triggerSaveWithConfirmation: () => void;
+  isEditing: boolean;
+}
+
 interface EditableItem {
   name: string;
   quantity: number;
   price: number;
 }
 
-export default function EditableOrderSummary({ 
+const EditableOrderSummary = forwardRef<EditableOrderSummaryRef, EditableOrderSummaryProps>(({ 
   orderDetails, 
   orderStatus,
   detectedPickupTime,
@@ -59,7 +65,7 @@ export default function EditableOrderSummary({
   itemsFromAI,
   notesFromAI,
   pickupTimeFromAI
-}: EditableOrderSummaryProps) {
+}, ref) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedItems, setEditedItems] = useState<EditableItem[]>([]);
   const [editedNotes, setEditedNotes] = useState(orderDetails.notes || '');
@@ -251,6 +257,20 @@ export default function EditableOrderSummary({
     setIsEditing(false);
   };
 
+  const triggerSaveWithConfirmation = () => {
+    if (editedItems.length === 0) {
+      return;
+    }
+    setShowConfirmDialog(true);
+  };
+
+  // Expose methods and state to parent via ref
+  useImperativeHandle(ref, () => ({
+    saveChanges,
+    triggerSaveWithConfirmation,
+    isEditing,
+  }));
+
   // Parse items to extract quantity, name, and price (moved outside conditional for reuse)
   const parseItemForDisplay = (item: string): { quantity: string; name: string; price: string } => {
     // Handle formats like "2x Item: $4.99" or "Item: $8.99" or "2x Item" or "Item"
@@ -367,9 +387,16 @@ export default function EditableOrderSummary({
     <Card className="p-4 bg-card border-2 border-border">
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-semibold text-sm text-foreground">Edit Order</h3>
-        <Badge variant="secondary" data-testid="badge-editing">
-          EDITING
-        </Badge>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={cancelEditing}
+          className="h-7 px-2 text-xs"
+          data-testid="button-cancel-edit-top"
+        >
+          <XCircle className="w-3.5 h-3.5 mr-1.5" />
+          Cancel
+        </Button>
       </div>
 
       <div className="px-0 pb-2 mb-3">
@@ -542,27 +569,6 @@ export default function EditableOrderSummary({
         />
       </div>
 
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          className="flex-1"
-          onClick={cancelEditing}
-          data-testid="button-cancel-edit"
-        >
-          <XCircle className="w-4 h-4 mr-2" />
-          Cancel
-        </Button>
-        <Button
-          className="flex-1"
-          onClick={() => setShowConfirmDialog(true)}
-          disabled={editedItems.length === 0}
-          data-testid="button-save-edit"
-        >
-          Send To Preparation
-          <ArrowRight className="w-4 h-4" />
-        </Button>
-      </div>
-
       <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <AlertDialogContent className="max-w-[280px] p-4">
           <AlertDialogHeader className="pb-2">
@@ -587,4 +593,8 @@ export default function EditableOrderSummary({
       </AlertDialog>
     </Card>
   );
-}
+});
+
+EditableOrderSummary.displayName = 'EditableOrderSummary';
+
+export default EditableOrderSummary;
