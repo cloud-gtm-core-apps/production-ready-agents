@@ -18,6 +18,7 @@ import IOSStatusBar from './IOSStatusBar';
 import QuickReplyTemplates from './QuickReplyTemplates';
 import EditableOrderSummary from './EditableOrderSummary';
 import AISuggestedResponse from './AISuggestedResponse';
+import { useIsMobile } from '@/hooks/use-mobile';
 import type { Conversation, OrderDetails } from '@shared/schema';
 
 type OptimisticMessage = {
@@ -141,6 +142,8 @@ export default function ConversationView({
   const [initialOrderDetails, setInitialOrderDetails] = useState<OrderDetails | null>(null);
   const [showOptInAlert, setShowOptInAlert] = useState(false);
   const [optInStatus, setOptInStatus] = useState<{ twilioCampaignEnabled: boolean; optInStatus: 'opted-in' | 'pending' | 'opted-out' | null } | null>(null);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const isMobile = useIsMobile();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastCustomerMessageIdRef = useRef<string | null>(null);
@@ -148,6 +151,8 @@ export default function ConversationView({
   const suggestionRef = useRef<HTMLDivElement>(null);
   const [suggestionHeight, setSuggestionHeight] = useState<number>(0);
   const orderSummaryRef = useRef<EditableOrderSummaryRef>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setAiSuggestedResponse(conversation.aiSuggestedResponse ?? null);
@@ -259,6 +264,28 @@ export default function ConversationView({
       previous.filter((message) => !existingTexts.has(message.text.trim().toLowerCase())),
     );
   }, [conversation.messages, optimisticMessages.length]);
+
+  // Scroll to bottom when input is focused (keyboard opens)
+  useEffect(() => {
+    if (isInputFocused) {
+      // Small delay to allow keyboard to start opening, then scroll
+      const timer1 = setTimeout(() => {
+        if (messagesContainerRef.current && messagesEndRef.current) {
+          messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+        }
+      }, 100);
+      
+      // Additional scroll after keyboard fully opens
+      const timer2 = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }, 400);
+      
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
+    }
+  }, [isInputFocused]);
 
   useEffect(() => {
     if (!aiSuggestedResponse) {
@@ -506,7 +533,15 @@ export default function ConversationView({
       <div
         className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 sm:py-4 space-y-2 sm:space-y-3"
         ref={messagesContainerRef}
-        style={{ paddingBottom: aiSuggestedResponse ? '5rem' : '2rem' }}
+        style={{ 
+          paddingBottom: aiSuggestedResponse 
+            ? (isMobile && isInputFocused 
+                ? 'calc(8rem + env(safe-area-inset-bottom, 0px))' 
+                : 'calc(5rem + env(safe-area-inset-bottom, 0px))')
+            : (isMobile && isInputFocused 
+                ? 'calc(7rem + env(safe-area-inset-bottom, 0px))' 
+                : 'calc(2rem + env(safe-area-inset-bottom, 0px))')
+        }}
       >
         {conversation.messages
           .filter((message) => !message.isAIOrganized)
@@ -653,16 +688,29 @@ export default function ConversationView({
         </div>
       )}
 
-      <div className="px-3 sm:px-4 py-2 sm:py-3 border-t border-border bg-black" style={{ paddingBottom: `calc(0.5rem + env(safe-area-inset-bottom))` }}>
+      <div 
+        ref={inputContainerRef}
+        className="sticky bottom-0 z-10 px-3 sm:px-4 py-2 sm:py-3 border-t border-border bg-black"
+        style={{ 
+          paddingBottom: `calc(0.5rem + env(safe-area-inset-bottom, 0px))`,
+          // On mobile, use transform to ensure it stays above keyboard
+          ...(isMobile ? {
+            transform: 'translateZ(0)', // Force hardware acceleration
+          } : {})
+        }}
+      >
         <div className="flex items-center gap-2">
           <QuickReplyTemplates onSelectTemplate={handleQuickReply} />
           <div className="flex-1 flex items-center gap-2 bg-muted rounded-full px-3 sm:px-4 py-2">
             <input
+              ref={inputRef}
               type="text"
               placeholder="iMessage"
               value={messageInput}
               onChange={(event) => setMessageInput(event.target.value)}
               onKeyPress={handleKeyPress}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
               className="flex-1 bg-transparent outline-none text-sm sm:text-base text-foreground"
               data-testid="input-message"
               disabled={isSending}
@@ -679,7 +727,6 @@ export default function ConversationView({
         </div>
       </div>
 
-      <div className="h-2 sm:h-8 bg-transparent" />
 
       <AlertDialog open={showOptInAlert} onOpenChange={setShowOptInAlert}>
         <AlertDialogContent className="max-w-[280px] p-4">

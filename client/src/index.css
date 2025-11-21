@@ -283,6 +283,18 @@
       touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
     }
+
+    /* Prevent viewport from jumping when keyboard appears on mobile */
+    input, textarea {
+      font-size: 16px; /* Prevents zoom on iOS when focusing input */
+    }
+
+    /* Ensure sticky elements work properly on mobile */
+    .sticky {
+      position: sticky;
+      -webkit-transform: translateZ(0);
+      transform: translateZ(0);
+    }
   }
 }
 
