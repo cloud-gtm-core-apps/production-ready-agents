@@ -2,7 +2,6 @@ import { Message } from "@shared/schema";
 import {
     formatConversation,
     buildMenuContext,
-    convertRelativeTimeToAbsolute,
     OpenAIOrderSummary,
     TrucubeOrderSummary,
     shouldGenerateAISuggestion,
@@ -13,11 +12,6 @@ import {
     OpenAIPickupTime,
     TrucubePickupTime,
 } from "./utils.js";
-
-type Meridiem = "AM" | "PM";
-
-const AFFIRMATION_REGEX =
-    /\b(yes|yep|yeah|yah|ya|sure|ok|okay|alright|sounds good|sounds great|that works|works for me|works|perfect|great|awesome|fine|cool|do it|go ahead|absolutely|definitely|of course|for sure|makes sense|correct|confirmed|please do|please|yup|yea)\b/i;
 
 export type OrderSummaryDetails = {
     customerName: string;
@@ -147,132 +141,6 @@ export async function analyzeOrderSummaryFromConversation(
         console.error("Error analyzing order:", error);
         return { orderMade: false };
     }
-}
-
-function findExplicitTimes(text: string): string[] {
-    const matches: string[] = [];
-    // Updated regex to catch:
-    // - Times with AM/PM: "3 PM", "3:30 PM", "3pm", "3:30pm"
-    // - Times without AM/PM: "3", "3:00", "12", "12:30" (standalone numbers that look like times)
-    // - Context: "pickup at 3", "for 3", "by 3", "around 3", etc.
-    const regex =
-        /\b((?:pickup|for|at|by|around|before|after)\s+)?((?:[01]?\d|2[0-3])(?::[0-5]\d)?(?:\s*(?:a\.?m\.?|p\.?m\.?))?)\b/gi;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
-        // Extract just the time part (group 2), ignore the context word (group 1)
-        if (match[2]) {
-            matches.push(match[2]);
-        }
-    }
-
-    // Also catch standalone numbers that could be times (1-12, optionally followed by :00 or :30)
-    // But only if they appear in time-related contexts
-    const standaloneRegex = /\b(pickup|for|at|by|around|before|after|ready)\s+(\d{1,2})(?::(\d{2}))?\b/gi;
-    let standaloneMatch: RegExpExecArray | null;
-    while ((standaloneMatch = standaloneRegex.exec(text)) !== null) {
-        const hour = parseInt(standaloneMatch[2], 10);
-        const minute = standaloneMatch[3] || '00';
-        // Only include if it's a valid hour (1-12 or 0-23)
-        if (hour >= 0 && hour <= 23) {
-            const timeStr = hour.toString() + (standaloneMatch[3] ? `:${minute}` : '');
-            // Avoid duplicates
-            if (!matches.includes(timeStr)) {
-                matches.push(timeStr);
-            }
-        }
-    }
-
-    return matches;
-}
-
-function normalizeExplicitTime(
-    raw: string,
-    fallbackPeriod: Meridiem | null,
-    reference: Date
-): { normalized: string | null; period: Meridiem | null } {
-    const cleaned = raw.trim().toLowerCase().replace(/\./g, "");
-    const timeMatch = cleaned.match(/(2[0-3]|1[0-2]|0?[0-9])(?::([0-5][0-9]))?/);
-    if (!timeMatch) {
-        return { normalized: null, period: fallbackPeriod };
-    }
-
-    let hour = parseInt(timeMatch[1], 10);
-    const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-
-    let period: Meridiem | null = null;
-    const ampmMatch = cleaned.match(/\b(am|pm)\b/);
-    if (ampmMatch) {
-        period = ampmMatch[1] === "am" ? "AM" : "PM";
-    }
-
-    if (hour === 0) {
-        hour = 12;
-        period = "AM";
-    } else if (hour === 12 && !period) {
-        period = "PM";
-    } else if (hour > 12) {
-        hour = hour - 12;
-        period = "PM";
-    }
-
-    // Intelligently infer AM/PM if not specified
-    if (!period) {
-        if (fallbackPeriod) {
-            period = fallbackPeriod;
-        } else {
-            // Smart inference based on current time and business hours
-            const currentHour = reference.getHours();
-            const currentMinute = reference.getMinutes();
-            const currentTotalMinutes = currentHour * 60 + currentMinute;
-            const targetTotalMinutes = hour * 60 + minute;
-
-            // Calculate time difference (handling next day)
-            let diffMinutes = targetTotalMinutes - currentTotalMinutes;
-            if (diffMinutes < 0) {
-                diffMinutes += 24 * 60; // Next day
-            }
-
-            // If within 1-2 hours, use same period as current time
-            if (diffMinutes <= 120) {
-                period = currentHour >= 12 ? "PM" : "AM";
-            } else {
-                // For times far from current time, use business logic:
-                // Restaurant hours typically 10 AM - 9 PM
-                // Times 1-9: usually PM (afternoon/evening)
-                // Times 10-11: could be AM (morning) or PM (evening)
-                // Time 12: usually PM (noon)
-
-                if (hour === 12) {
-                    // "12" without AM/PM is usually noon (12 PM), not midnight
-                    period = "PM";
-                } else if (hour >= 1 && hour <= 9) {
-                    // Times 1-9 are usually PM for restaurant pickup
-                    period = "PM";
-                } else if (hour === 10 || hour === 11) {
-                    // 10-11 could be AM or PM, but if current time is afternoon/evening, likely PM
-                    // If current time is morning, could be AM
-                    if (currentHour >= 12) {
-                        period = "PM"; // Afternoon/evening, so 10-11 is likely PM
-                    } else {
-                        // Morning: if target is close (within 3 hours), use AM; otherwise PM
-                        if (diffMinutes <= 180) {
-                            period = "AM";
-                        } else {
-                            period = "PM"; // Far in future, likely PM
-                        }
-                    }
-                } else {
-                    // Default: use current period
-                    period = currentHour >= 12 ? "PM" : "AM";
-                }
-            }
-        }
-    }
-
-    const hoursString = hour.toString();
-    const minutesString = minute.toString().padStart(2, "0");
-    const normalized = `${hoursString}:${minutesString} ${period}`;
-    return { normalized, period };
 }
 
 /**
