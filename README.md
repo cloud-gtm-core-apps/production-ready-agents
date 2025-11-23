@@ -55,7 +55,7 @@ When a new message arrives, the system automatically:
 - Keeps responses casual and human-sounding (10-20 words)
 - Cached per order to avoid redundant API calls
 
-### Conditional AI Output (`analyzeConditionalAIOutput`)
+### Conditional AI Output (`analyzeConditionalAIOutput`) - Work In Progress
 - Handles special edge cases that need custom logic
 - Currently handles "half sandwich" requests
 - Can generate both order summary and suggested response for edge cases
@@ -86,7 +86,7 @@ When a new message arrives, the system automatically:
 - `clover.service.ts` - Clover POS integration
 
 ### AI Integration
-- Supports **OpenAI** (default) or **Trucube** models
+- Supports **OpenAI** or **Trucube** models
 - Set `MODEL=TRUCUBE` environment variable to use Trucube
 - All AI functions in `aiFunctions.ts` with prompts in `utils.ts`
 
