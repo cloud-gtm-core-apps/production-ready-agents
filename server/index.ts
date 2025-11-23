@@ -3,9 +3,9 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import passport from "./auth.js";
-import { registerRoutes, checkForOrderDetection } from "./routes.js";
+import { registerRoutes } from "./routes/routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
-import { restoreOrderDetectionTimers } from "./utils.js";
+import { restoreOrderDetectionTimers, checkForOrderDetection } from "./utils.js";
 
 const app = express();
 

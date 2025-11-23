@@ -1,6 +1,7 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync, randomUUID } from "crypto";
+import type { Response as ExpressResponse } from "express";
 import { storage } from "./storage.js";
-import { menuItemsCache, type MenuItemCache } from "./globals.js";
+import { menuItemsCache, MESSAGING_SERVICE_URL, OptInStatus, twilioOptInCache, sseClients, type MenuItemCache } from "./globals.js";
 import { Message } from "@shared/schema";
 import { openai } from "./clients.js";
 import { IStorage } from "./storage.js";
@@ -8,6 +9,7 @@ import { oauthTokens } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { getRedisClient, getRedisSubscriber } from "./redis.js";
+import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation } from "./aiFunctions.js";
 
 
 // Check if user is authenticated
@@ -320,6 +322,47 @@ export async function getRecentSSEEvents(userId: string): Promise<SSEEvent[]> {
         console.error(`[SSE] Error getting recent events for userId ${userId}:`, error);
         return [];
     }
+}
+
+// Helper function to send SSE payload to local clients
+export function sendSSEToClients(userId: string, payload: string) {
+    const clients = sseClients.get(userId);
+    if (!clients || clients.size === 0) {
+        return;
+    }
+
+    const staleClients: ExpressResponse[] = [];
+
+    for (const client of Array.from(clients)) {
+        try {
+            client.write(payload);
+        } catch (error) {
+            staleClients.push(client);
+        }
+    }
+
+    if (staleClients.length > 0) {
+        const set = sseClients.get(userId);
+        if (!set) {
+            return;
+        }
+        staleClients.forEach((client) => {
+            set.delete(client);
+            try {
+                client.end();
+            } catch {
+                // noop
+            }
+        });
+        if (set.size === 0) {
+            sseClients.delete(userId);
+        }
+    }
+}
+
+// Emit SSE event (with Redis support if PRODUCTION=true)
+export async function emitSSE(userId: string, event: string, data: unknown) {
+    await emitSSEWithRedis(userId, event, data, sendSSEToClients);
 }
 
 export function setupRedisSSESubscription(
@@ -1133,7 +1176,7 @@ export async function updateCloverOrder(
         console.log(`[Clover] Attempting to update Clover order ${cloverOrderId} for merchant ${merchantId}`);
         console.log(`[Clover] Update payload:`, JSON.stringify(updatePayload, null, 2));
 
-        let cloverResponse: Response | null = null;
+        let cloverResponse: Awaited<ReturnType<typeof fetch>> | null = null;
         let lastError: string = '';
 
         // Try 1: PATCH on regular orders endpoint
@@ -1306,3 +1349,464 @@ export async function createCloverOrder(
         console.error('[Clover] Error creating order in Clover:', error);
     }
 }
+
+export async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
+    const trimmed = typeof message === "string" ? message.trim() : "";
+  
+    if (!trimmed) {
+      throw Object.assign(new Error("Message is empty"), { reason: "empty-message" });
+    }
+  
+    try {
+      const response = await fetch(MESSAGING_SERVICE_URL, {
+        method: "POST", 
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to,
+          message: trimmed,
+        }),
+      });
+  
+      if (!response.ok) {
+        let errorBody: string | undefined;
+        try {
+          errorBody = await response.text();
+        } catch (readError) {
+          console.error("[Messaging Service] Failed to read error response body", readError);
+        }
+  
+        const error = Object.assign(
+          new Error("Messaging service returned a non-OK response"),
+          {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorBody,
+          }
+        );
+  
+        throw error;
+      }
+    } catch (error) {
+      if (error instanceof Error && !("status" in error)) {
+        console.error("[Messaging Service] Error sending message", error);
+      }
+      throw error;
+    }
+}
+
+export async function getOptInStatus(phoneNumber: string): Promise<OptInStatus | undefined> {
+    const redis = getRedisClient();
+    const cacheKey = `twilio:optin:${phoneNumber}`;
+  
+    // Try Redis first if available
+    if (redis) {
+      try {
+        const status = await redis.get(cacheKey);
+        if (status) {
+          return status as OptInStatus;
+        }
+      } catch (error) {
+        console.error(`[Twilio Opt-In] Redis get error for ${phoneNumber}:`, error);
+      }
+    }
+  
+    // Fallback to in-memory cache
+    return twilioOptInCache.get(phoneNumber);
+  }
+
+  export async function setOptInStatus(phoneNumber: string, status: OptInStatus): Promise<void> {
+    const redis = getRedisClient();
+    const cacheKey = `twilio:optin:${phoneNumber}`;
+  
+    // Store in Redis if available (with long TTL - 1 year for compliance)
+    if (redis) {
+      try {
+        // Store with TTL of 1 year (31536000 seconds)
+        await redis.setex(cacheKey, 31536000, status);
+        console.log(`[Twilio Opt-In] Stored status '${status}' in Redis for ${phoneNumber}`);
+      } catch (error) {
+        console.error(`[Twilio Opt-In] Redis set error for ${phoneNumber}:`, error);
+      }
+    }
+  
+    // Also store in in-memory cache as fallback
+    twilioOptInCache.set(phoneNumber, status);
+  }
+
+// Calculate total from order items
+export function calculateTotalFromItems(items?: string[]): string | undefined {
+    if (!items || items.length === 0) {
+        return undefined;
+    }
+
+    let total = 0;
+    let foundPrice = false;
+
+    for (const item of items) {
+        const priceMatch = item.match(/:\s*\$([\d.,]+)/);
+        if (priceMatch) {
+            const value = parseFloat(priceMatch[1].replace(/,/g, ''));
+            if (!Number.isNaN(value)) {
+                total += value;
+                foundPrice = true;
+            }
+        }
+    }
+
+    if (!foundPrice) {
+        return undefined;
+    }
+
+    return total.toFixed(2);
+}
+
+// Helper function to trigger debounced order detection
+export async function triggerDebouncedOrderDetection(userId: string, orderId: string) {
+    // Clear existing timer if any
+    await clearOrderDetectionTimer(orderId);
+
+    // Set new timer for 2 seconds (with Redis support if PRODUCTION=true)
+    await setOrderDetectionTimer(userId, orderId, 2000, checkForOrderDetection);
+    console.log(`[Order Detection] Debounce timer started for order ${orderId} (2 seconds)`);
+}
+
+// Helper function to check for order detection asynchronously
+export async function checkForOrderDetection(
+    userId: string,
+    orderId: string
+): Promise<void> {
+    // Log immediately to confirm function is called
+    console.log(`[Order Detection] Function called for order ${orderId}, userId: ${userId}`);
+
+    // Return a promise that resolves after the delay and work is complete
+    return new Promise((resolve) => {
+        // Run asynchronously with a delay to ensure message is saved to database
+        setTimeout(async () => {
+            try {
+                console.log(`[Order Detection] Starting check for order ${orderId}, userId: ${userId}`);
+
+                const order = await storage.getOrderById(userId, orderId);
+
+                if (!order) {
+                    console.log(`[Order Detection] Order ${orderId} not found, skipping`);
+                    resolve();
+                    return;
+                }
+
+                // Get all messages for the conversation
+                const conversation = await storage.getOrderConversation(userId, orderId);
+                if (!conversation) {
+                    console.log(`[Order Detection] No conversation found for order ${orderId}, skipping`);
+                    resolve();
+                    return;
+                }
+
+                const messages = (conversation.messages as Message[]) || [];
+                console.log(`[Order Detection] Found ${messages.length} messages in conversation`);
+
+                if (messages.length === 0) {
+                    console.log(`[Order Detection] No messages in conversation, skipping`);
+                    resolve();
+                    return;
+                }
+
+                // Check if there are any customer messages (isOutgoing: true)
+                // If only restaurant messages exist, skip order detection (no customer input yet)
+                const hasCustomerMessages = messages.some(msg => msg.isOutgoing === true);
+                if (!hasCustomerMessages) {
+                    console.log(`[Order Detection] No customer messages in conversation yet, skipping (only restaurant messages)`);
+                    resolve();
+                    return;
+                }
+
+                // Check if there's an existing AI organized message
+                // If it exists, check if there are new messages after it
+                const allAIOrganizedMessages = messages.filter(msg => msg.isAIOrganized === true);
+                const latestAIOrganizedMessage = allAIOrganizedMessages.length > 0
+                    ? allAIOrganizedMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+                    : null;
+
+                let hasNewMessages = false;
+
+                if (latestAIOrganizedMessage) {
+                    // Find messages after the latest AI organized message
+                    const lastAITimestamp = new Date(latestAIOrganizedMessage.timestamp).getTime();
+                    const newMessages = messages.filter(msg =>
+                        new Date(msg.timestamp).getTime() > lastAITimestamp && !msg.isAIOrganized
+                    );
+
+                    if (newMessages.length === 0) {
+                        // No new messages after last AI organized message, skip analysis
+                        console.log(`[Order Detection] No new messages after last AI organized message, skipping analysis`);
+                        resolve();
+                        return;
+                    }
+
+                    hasNewMessages = true;
+                    console.log(`[Order Detection] Found ${newMessages.length} new messages after last AI organized message, will analyze full conversation and compare`);
+                }
+
+                // Get menu items with caching for context
+                const menuItems = await getMenuItemsWithCache(userId);
+                console.log(`[Order Detection] Retrieved ${menuItems.length} menu items for context`);
+
+                // Analyze FULL conversation for order (need full context for AI to understand the order)
+                console.log(`[Order Detection] Calling analyzeOrderSummaryFromConversation for order ${orderId}...`);
+                const summaryResult = await analyzeOrderSummaryFromConversation(
+                    messages,
+                    order.firstName || undefined,
+                    menuItems
+                );
+
+                const analysis = {
+                    orderMade: summaryResult.orderMade,
+                    orderDetails: summaryResult.orderDetails ? { ...summaryResult.orderDetails } : undefined,
+                };
+
+                const detectedPickupTime = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+                if (analysis.orderDetails) {
+                    if (!analysis.orderDetails.customerName) {
+                        analysis.orderDetails.customerName = order.firstName || order.number || "Customer";
+                    }
+
+                    if (detectedPickupTime) {
+                        analysis.orderDetails.pickupTime = detectedPickupTime;
+                    }
+                }
+
+                console.log(`[Order Detection] Analysis result for order ${orderId}:`, {
+                    orderMade: analysis.orderMade,
+                    hasDetails: !!analysis.orderDetails,
+                    pickupTime: analysis.orderDetails?.pickupTime,
+                    pickupTimeType: typeof analysis.orderDetails?.pickupTime
+                });
+
+                if (analysis.orderMade && analysis.orderDetails) {
+                    // If there's a previous AI organized message, compare the new analysis with it
+                    // Only create a new message if the order has actually changed
+                    if (latestAIOrganizedMessage && hasNewMessages) {
+                        // Parse the previous AI organized message to extract order details
+                        const previousText = latestAIOrganizedMessage.text;
+                        const newOrderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
+
+                        // Compare the formatted messages - if they're the same, order hasn't changed
+                        if (previousText === newOrderMessageText) {
+                            console.log(`[Order Detection] Order has not changed (exact match), skipping new AI organized message`);
+                            resolve();
+                            return;
+                        }
+
+                        // Do a more detailed comparison of order details
+                        // Extract items from previous message by parsing the formatted text
+                        // Items appear after "Customer:" line and before notes/pickup time
+                        const previousLines = previousText.split('\n').filter((line: string) => line.trim());
+                        const previousItems: string[] = [];
+                        let foundCustomer = false;
+                        let inItemsSection = false;
+
+                        for (const line of previousLines) {
+                            const trimmed = line.trim();
+
+                            if (trimmed.toLowerCase().startsWith('customer:')) {
+                                foundCustomer = true;
+                                inItemsSection = true;
+                                continue;
+                            }
+
+                            if (foundCustomer && inItemsSection) {
+                                // Check if we've reached notes or pickup time section
+                                if (trimmed.toLowerCase().includes('pickup time:')) {
+                                    inItemsSection = false;
+                                    break;
+                                }
+
+                                // Items contain $ (price) or start with quantity (e.g., "2x ")
+                                // Skip empty lines and notes (notes don't have $ and don't start with quantity)
+                                if (trimmed && (trimmed.includes('$') || trimmed.match(/^\d+x\s+/i))) {
+                                    previousItems.push(trimmed);
+                                } else if (trimmed.length > 50 || (previousItems.length > 0 && !trimmed.includes('$') && !trimmed.match(/^\d+x\s+/i))) {
+                                    // Likely notes section, stop collecting items
+                                    inItemsSection = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Extract items from new analysis (these are the raw items from AI)
+                        const newItems = analysis.orderDetails.items || [];
+
+                        // Normalize items for comparison - extract just item name and quantity, ignore prices
+                        const normalizeItem = (item: string) => {
+                            // Remove price information (everything after : $ or :$)
+                            let normalized = item.trim()
+                                .replace(/:\s*\$[0-9.]+.*$/i, '') // Remove price and everything after
+                                .replace(/\s+/g, ' ') // Normalize whitespace
+                                .toLowerCase();
+
+                            // Extract quantity and item name (e.g., "2x burger" or "burger")
+                            const quantityMatch = normalized.match(/^(\d+)x\s*(.+)$/);
+                            if (quantityMatch) {
+                                const quantity = parseInt(quantityMatch[1]);
+                                const itemName = quantityMatch[2].trim();
+                                return `${quantity}x ${itemName}`;
+                            }
+
+                            return normalized.trim();
+                        };
+
+                        const previousItemsNormalized = previousItems.map(normalizeItem).sort();
+                        const newItemsNormalized = newItems.map(normalizeItem).sort();
+
+                        // Compare items
+                        const itemsChanged = JSON.stringify(previousItemsNormalized) !== JSON.stringify(newItemsNormalized);
+
+                        // Compare pickup time (normalize both to handle format variations)
+                        const previousPickupTimeMatch = previousText.match(/Pickup Time:\s*(.+?)(?:\n|$)/i);
+                        const previousPickupTime = previousPickupTimeMatch?.[1]?.trim() || null;
+                        const newPickupTime = analysis.orderDetails.pickupTime || null;
+                        const pickupTimeChanged = previousPickupTime !== newPickupTime;
+
+                        // Compare notes (if present)
+                        // Notes appear after items, before pickup time
+                        const notesMatch = previousText.match(/Customer:[\s\S]*?\n\n([\s\S]*?)(?:\n\nPickup Time:|$)/i);
+                        const previousNotes = notesMatch?.[1]?.trim() || null;
+                        // Clean up notes - remove any items that might have been captured
+                        const cleanedPreviousNotes = previousNotes && !previousNotes.includes('$') && !previousNotes.match(/^\d+x\s+/i)
+                            ? previousNotes
+                            : null;
+                        const newNotes = analysis.orderDetails.notes?.trim() || null;
+                        const notesChanged = cleanedPreviousNotes !== newNotes;
+
+                        console.log(`[Order Detection] Comparison results:`, {
+                            itemsChanged,
+                            pickupTimeChanged,
+                            notesChanged,
+                            previousItems: previousItemsNormalized,
+                            newItems: newItemsNormalized,
+                            previousItemsCount: previousItemsNormalized.length,
+                            newItemsCount: newItemsNormalized.length,
+                            previousPickupTime,
+                            newPickupTime,
+                            previousNotes: cleanedPreviousNotes,
+                            newNotes
+                        });
+
+                        // Only skip if nothing changed
+                        if (!itemsChanged && !pickupTimeChanged && !notesChanged) {
+                            console.log(`[Order Detection] Order details unchanged, skipping new AI organized message`);
+                            resolve();
+                            return;
+                        }
+
+                        console.log(`[Order Detection] Order has changed - items: ${itemsChanged}, pickup time: ${pickupTimeChanged}, notes: ${notesChanged}`);
+                    }
+
+                    // Check if pickup time is included in order details (handle various formats: string, null, undefined, "null" string)
+                    const pickupTimeValue = analysis.orderDetails.pickupTime;
+                    const hasPickupTime = pickupTimeValue &&
+                        pickupTimeValue !== null &&
+                        pickupTimeValue !== undefined &&
+                        String(pickupTimeValue).trim().toLowerCase() !== 'null' &&
+                        String(pickupTimeValue).trim().length > 0;
+
+                    console.log(`[Order Detection] Pickup time check for order ${orderId}:`, {
+                        pickupTime: analysis.orderDetails.pickupTime,
+                        hasPickupTime: hasPickupTime
+                    });
+
+                    // Create a NEW AI organized message bubble only if order changed
+                    {
+
+                        // Format and create NEW AI organized message
+                        const orderMessageText = formatOrderMessage(analysis.orderDetails, menuItems);
+                        console.log(`[Order Detection] Creating NEW AI organized message for order ${orderId}:`, orderMessageText.substring(0, 100));
+
+                        const orderMessage: Message = {
+                            id: randomUUID(), // Always generate new ID for new message bubble
+                            text: orderMessageText,
+                            isOutgoing: false,
+                            timestamp: new Date().toISOString(),
+                            isAIOrganized: true,
+                        };
+
+                        // Save the NEW AI organized message (adds to conversation, doesn't replace)
+                        console.log(`[Order Detection] Saving NEW AI organized message to database for order ${orderId}...`);
+                        await storage.addMessageToOrder(userId, orderId, orderMessage);
+
+                        // Update orderMade flag
+                        console.log(`[Order Detection] Setting orderMade=true for order ${orderId}...`);
+                        await storage.updateOrderMade(orderId, true);
+
+                        // If pickup time was included in order details, send it to frontend (don't save to DB)
+                        if (hasPickupTime) {
+                            console.log(`[Order Detection] Pickup time included in order details (${pickupTimeValue}), persisting detection flag...`);
+
+                            // Set the flag so pickup time detection knows it was already found
+                            await storage.updatePickupTimeDetected(orderId, true);
+                        } else {
+                            console.log(`[Order Detection] No pickup time in order details for order ${orderId}, pickupTimeDetected flag not set`);
+                        }
+
+                        console.log(`[Order Detection] ✓ Order detected and message saved successfully for order ${orderId}`);
+
+                        // Ensure orderDetails exists (it should at this point, but TypeScript needs the check)
+                        const orderDetails = analysis.orderDetails;
+                        if (orderDetails) {
+                            console.log(`[Order Detection] Prepared structured order details for order ${orderId}:`, {
+                                items: orderDetails.items,
+                                notes: orderDetails.notes,
+                                pickupTime: orderDetails.pickupTime,
+                            });
+
+                            try {
+                                const derivedTotal = calculateTotalFromItems(orderDetails.items);
+                                const updatePayload: {
+                                    items?: string[];
+                                    notes?: string | null;
+                                    pickupTime?: string | Date;
+                                    total?: string;
+                                } = {
+                                    items: orderDetails.items,
+                                    pickupTime: orderDetails.pickupTime, // This will be stored in notes by updateOrderFromDetails
+                                    total: derivedTotal,
+                                };
+
+                                // Notes will be handled in updateOrderFromDetails (it will append pickup time to notes)
+                                // Only set notes if pickupTime is not present (to avoid conflicts)
+                                if (orderDetails.notes !== undefined && !orderDetails.pickupTime) {
+                                    updatePayload.notes = orderDetails.notes ?? null;
+                                }
+
+                                await updateOrderFromDetails(
+                                    storage,
+                                    orderId,
+                                    updatePayload,
+                                    { skipStatusUpdate: true }
+                                );
+                                console.log(`[Order Detection] Persisted AI order details to order ${orderId}`);
+                            } catch (persistError) {
+                                console.error(`[Order Detection] Failed to persist AI order details for order ${orderId}:`, persistError);
+                            }
+                        }
+                    }
+                } else {
+                    console.log(`[Order Detection] No order detected in conversation for order ${orderId}`);
+                }
+
+                // Resolve promise when order detection is complete
+                resolve();
+            } catch (error) {
+                console.error(`[Order Detection] ERROR in order detection for order ${orderId}:`, error);
+                if (error instanceof Error) {
+                    console.error(`[Order Detection] Error stack:`, error.stack);
+                }
+                // Resolve promise even on error
+                resolve();
+            }
+        }, 500); // Delay to ensure database transaction is committed
+    });
+}
+
+  
