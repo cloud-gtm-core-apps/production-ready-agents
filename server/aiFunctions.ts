@@ -10,6 +10,8 @@ import {
     TrucubeSuggestedResponse,
     OpenAIConditionalOutput,
     TrucubeConditionalOutput,
+    OpenAIPickupTime,
+    TrucubePickupTime,
 } from "./utils.js";
 
 type Meridiem = "AM" | "PM";
@@ -274,87 +276,77 @@ function normalizeExplicitTime(
 }
 
 /**
- * Inspects the conversation to find the most recent pickup time agreed upon.
- * This logic is deterministic (non-AI) and complements the AI summary.
+ * Inspects the conversation to find the most recent confirmed pickup time using AI.
+ * Returns the confirmed pickup time if detected, otherwise null.
  */
 export async function detectPickupTimeFromConversation(
     messages: Message[],
     options?: { referenceTime?: Date }
 ): Promise<string | null> {
-    const { getRestaurantDateTimeComponents } = await import("./timezone.js");
-    let reference: Date;
-    if (options?.referenceTime) {
-        const components = getRestaurantDateTimeComponents(options.referenceTime);
-        reference = new Date(
-            components.year,
-            components.month,
-            components.day,
-            components.hours,
-            components.minutes,
-            components.seconds
-        );
-    } else {
-        const components = getRestaurantDateTimeComponents();
-        reference = new Date(
-            components.year,
-            components.month,
-            components.day,
-            components.hours,
-            components.minutes,
-            components.seconds
-        );
+    const { getCurrentRestaurantTimeString } = await import("./timezone.js");
+    const currentTimeString = getCurrentRestaurantTimeString();
+
+    // Filter out AI-organized messages
+    const conversationMessages = messages.filter(msg => !msg.isAIOrganized);
+    
+    if (conversationMessages.length === 0) {
+        return null;
     }
 
-    let lastPeriod: Meridiem | null = null;
-    let pendingOwnerProposal: { normalized: string; index: number } | null = null;
-    let confirmedPickup: string | null = null;
+    const conversationText = formatConversation(conversationMessages);
 
-    messages.forEach((message, index) => {
-        if (message.isAIOrganized) {
-            return;
+    // Build system prompt for pickup time detection
+    const systemPrompt = `You are a pickup time detection system for a restaurant. Analyze the conversation and extract the pickup time if mentioned.
+
+Current time is ${currentTimeString}.
+
+Pickup time rules:
+- If a relative time is mentioned (e.g., "in 1 hour", "30 minutes", "15 min", "half an hour"), convert it to an absolute time based on ${currentTimeString}.
+- If an absolute time is mentioned (e.g., "3:30 PM", "5pm"), use it directly.
+- Always format the final time as "HH:MM AM/PM".
+- Pay strict attention to the entire conversation and detect if the pickup time changes. Return the most recent confirmed pickup time.
+- If the restaurant owner proposes a time and the customer confirms it (with words like "yes", "sounds good", "ok", etc.), that is the confirmed pickup time.
+- If the customer directly mentions a pickup time, that is the confirmed pickup time.
+
+Examples:
+- Current time 2:00 PM + "in 1 hour" → "3:00 PM"
+- Current time 2:00 PM + "in 30 minutes" → "2:30 PM"
+- Current time 2:00 PM + "3:30 PM" → "3:30 PM"
+- Restaurant: "Ready at 5 PM?" Customer: "Yes" → "5:00 PM"
+
+Return only valid JSON:
+{
+  "pickupTimeDetected": boolean,
+  "pickupTime"?: string
+}
+
+If no pickup time is mentioned or confirmed, return:
+{"pickupTimeDetected": false}`;
+
+    try {
+        const getPickupTime = process.env.MODEL === "TRUCUBE" ? TrucubePickupTime : OpenAIPickupTime;
+        
+        const response = await getPickupTime(systemPrompt, conversationText);
+
+        if (response.pickupTimeDetected && response.pickupTime) {
+            // Convert relative time to absolute if needed
+            const { convertRelativeTimeToAbsolute } = await import("./utils.js");
+            const referenceTime = options?.referenceTime || new Date();
+            const convertedTime = await convertRelativeTimeToAbsolute(response.pickupTime, referenceTime);
+            
+            if (convertedTime) {
+                return convertedTime;
+            }
+            
+            // If conversion failed but we have a time, return it as-is (might already be absolute)
+            return response.pickupTime;
         }
 
-        const text = message.text || "";
-        const explicitTimes = findExplicitTimes(text);
-        const cleanedText = text.replace(/\s+/g, " ").trim();
-
-        if (message.isOutgoing === true) {
-            // Customer message
-            if (explicitTimes.length > 0) {
-                explicitTimes.forEach((raw) => {
-                    const { normalized, period } = normalizeExplicitTime(raw, lastPeriod, reference);
-                    if (!normalized) {
-                        return;
-                    }
-                    lastPeriod = period ?? lastPeriod;
-                    confirmedPickup = normalized;
-                    pendingOwnerProposal = null;
-                });
-            } else if (
-                pendingOwnerProposal &&
-                pendingOwnerProposal.index < index &&
-                AFFIRMATION_REGEX.test(cleanedText) &&
-                findExplicitTimes(cleanedText).length === 0
-            ) {
-                confirmedPickup = pendingOwnerProposal.normalized;
-                pendingOwnerProposal = null;
-            }
-        } else {
-            // Owner/restaurant message
-            if (explicitTimes.length > 0) {
-                explicitTimes.forEach((raw) => {
-                    const { normalized, period } = normalizeExplicitTime(raw, lastPeriod, reference);
-                    if (!normalized) {
-                        return;
-                    }
-                    lastPeriod = period ?? lastPeriod;
-                    pendingOwnerProposal = { normalized, index };
-                });
-            }
-        }
-    });
-
-    return confirmedPickup;
+        return null;
+    } catch (error) {
+        console.error("Error detecting pickup time from conversation:", error);
+        return null;
+    }
 }
 
 export type ConditionalAIOutput = {

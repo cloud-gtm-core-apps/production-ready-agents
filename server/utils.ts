@@ -1036,6 +1036,89 @@ export async function TrucubeConditionalOutput(
     }
 }
 
+// Call OpenAI API for Pickup Time Detection
+export async function OpenAIPickupTime(
+    systemPrompt: string,
+    conversationText: string
+): Promise<{
+    pickupTimeDetected: boolean;
+    pickupTime?: string;
+}> {
+    const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Analyze this conversation:\n\n${conversationText}` }
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+    });
+
+    try {
+        return JSON.parse(completion.choices[0].message.content || '{"pickupTimeDetected": false}');
+    } catch (error) {
+        console.error("Error parsing OpenAI pickup time response:", error);
+        return { pickupTimeDetected: false };
+    }
+}
+
+// Call Trucube API for Pickup Time Detection
+export async function TrucubePickupTime(
+    systemPrompt: string,
+    conversationText: string
+): Promise<{
+    pickupTimeDetected: boolean;
+    pickupTime?: string;
+}> {
+    const BEARER_TOKEN = process.env.TRUCUBE_BEARER_TOKEN;
+    if (!BEARER_TOKEN) {
+        throw new Error("TRUCUBE_BEARER_TOKEN is not set");
+    }
+
+    try {
+        const response = await fetch("http://98.15.217.173:3000/api/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${BEARER_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: "llama3.1:latest",
+                messages: [
+                    {
+                        role: "system",
+                        content: systemPrompt,
+                    },
+                    {
+                        role: "user",
+                        content: `Analyze this conversation:\n\n${conversationText}`,
+                    },
+                ],
+                stream: false,
+            }),
+        });
+
+        const data = await response.json() as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
+        const assistantMessage = data?.choices?.[0]?.message?.content;
+
+        if (!assistantMessage) {
+            return { pickupTimeDetected: false };
+        }
+
+        try {
+            return JSON.parse(assistantMessage);
+        } catch (error) {
+            console.error("Error parsing Trucube pickup time response:", assistantMessage, error);
+            return { pickupTimeDetected: false };
+        }
+    } catch (error) {
+        console.error("Error calling Trucube API for pickup time:", error);
+        return { pickupTimeDetected: false };
+    }
+}
+
 // Random name generator for test conversations (Dearborn demographic)
 const FIRST_NAMES = ['Fatima', 'Ahmed', 'Nour', 'Layla', 'Hassan', 'Zainab', 'Youssef', 'Rania', 'Omar', 'Maryam', 'Ali', 'Dina', 'Karim', 'Sara', 'Hadi', 'Mariam', 'Bilal', 'Lina', 'Tariq', 'Amira'];
 const LAST_NAMES = ['Hassan', 'Ali', 'Bakri', 'Mansour', 'Khalil', 'Ahmad', 'Hammoud', 'Saleh', 'Ibrahim', 'Farah', 'Rahman', 'Mustafa', 'Nasser', 'Khoury', 'Masri', 'Saad'];
