@@ -153,6 +153,7 @@ export default function ConversationView({
   const orderSummaryRef = useRef<EditableOrderSummaryRef>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  const suggestionFallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setAiSuggestedResponse(conversation.aiSuggestedResponse ?? null);
@@ -207,9 +208,16 @@ export default function ConversationView({
     }
   }, [conversation.id, conversation.messages]);
 
+  // Update AI suggested response when it arrives via SSE
+  // If we get it from SSE, cancel any pending fallback timeout
   useEffect(() => {
     if (conversation.aiSuggestedResponse) {
       setAiSuggestedResponse(conversation.aiSuggestedResponse);
+      // Cancel fallback timeout since SSE delivered the suggestion
+      if (suggestionFallbackTimeoutRef.current) {
+        clearTimeout(suggestionFallbackTimeoutRef.current);
+        suggestionFallbackTimeoutRef.current = null;
+      }
     }
   }, [conversation.aiSuggestedResponse]);
 
@@ -314,6 +322,8 @@ export default function ConversationView({
     };
   }, [aiSuggestedResponse]);
 
+  // Refresh AI order summary when new customer messages arrive
+  // AI suggested reply comes via SSE, so we only fetch it as a fallback if SSE doesn't deliver
   useEffect(() => {
     const latestCustomerMessage = [...conversation.messages]
       .reverse()
@@ -331,7 +341,8 @@ export default function ConversationView({
 
     let cancelled = false;
 
-    const refreshInsights = async () => {
+    // Always refresh order summary when new messages arrive
+    const refreshOrderSummary = async () => {
       try {
         const summaryRes = await fetch(`/api/orders/${conversation.id}/ai-order-summary`);
 
@@ -344,26 +355,49 @@ export default function ConversationView({
             setAiOrderDetails(createOrderDetailsFromAIDetails(summaryData.details));
           }
         }
-
-        const suggestionRes = await fetch(`/api/orders/${conversation.id}/ai-suggested-reply`);
-
-        if (!cancelled && suggestionRes.ok) {
-          const suggestionData = await suggestionRes.json();
-          if (typeof suggestionData?.suggestion === 'string' && suggestionData.suggestion.trim()) {
-            setAiSuggestedResponse(suggestionData.suggestion);
-          }
-        }
       } catch (error) {
-        console.error('[ConversationView] Failed to refresh AI insights:', error);
+        console.error('[ConversationView] Failed to refresh AI order summary:', error);
       }
     };
 
-    void refreshInsights();
+    void refreshOrderSummary();
+
+    // Clear any existing fallback timeout
+    if (suggestionFallbackTimeoutRef.current) {
+      clearTimeout(suggestionFallbackTimeoutRef.current);
+      suggestionFallbackTimeoutRef.current = null;
+    }
+
+    // Set a fallback timeout: if SSE hasn't provided the suggestion within 3 seconds, fetch via API
+    // This handles cases where SSE is slow, delayed, or not connected
+    const orderIdForFallback = conversation.id;
+    suggestionFallbackTimeoutRef.current = setTimeout(async () => {
+      // Only fetch if we still don't have a suggestion (timeout will be cancelled if SSE delivers)
+      if (!cancelled) {
+        try {
+          const suggestionRes = await fetch(`/api/orders/${orderIdForFallback}/ai-suggested-reply`);
+
+          if (!cancelled && suggestionRes.ok) {
+            const suggestionData = await suggestionRes.json();
+            if (typeof suggestionData?.suggestion === 'string' && suggestionData.suggestion.trim()) {
+              setAiSuggestedResponse(suggestionData.suggestion);
+            }
+          }
+        } catch (error) {
+          console.error('[ConversationView] Failed to fetch AI suggested reply (fallback):', error);
+        }
+      }
+      suggestionFallbackTimeoutRef.current = null;
+    }, 3000); // 3 second timeout for SSE to deliver
 
     return () => {
       cancelled = true;
+      if (suggestionFallbackTimeoutRef.current) {
+        clearTimeout(suggestionFallbackTimeoutRef.current);
+        suggestionFallbackTimeoutRef.current = null;
+      }
     };
-  }, [conversation.id, conversation.messages]);
+  }, [conversation.id, conversation.messages, conversation.aiSuggestedResponse, aiSuggestedResponse]);
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !onSendMessage) {

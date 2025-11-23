@@ -77,17 +77,21 @@ export class DbStorage implements IStorage {
     return result;
   }
 
+  // Get order counts for today, grouped by status (New, Confirmed, Ready)
+  // TODO: Optimize this query to be more efficient
   async getOrderCounts(userId: string): Promise<{ new: number; confirmed: number; ready: number; }> {
-
+    // Calculate today's date range (midnight to midnight)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    // Fetch all orders from today
     const allOrders = await db.select()
       .from(orders)
       .where(and(eq(orders.userId, userId), gte(orders.lastMessage, today), lt(orders.lastMessage, tomorrow)));
 
+    // Count orders by status
     return {
       new: allOrders.filter(o => o.status === 'New').length,
       confirmed: allOrders.filter(o => o.status === 'Confirmed').length,

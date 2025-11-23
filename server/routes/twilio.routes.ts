@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { storage } from "../storage.js";
-import { isAuthenticated, getOptInStatus } from "../utils.js";
+import { isAuthenticated } from "../utils.js";
+import { getOptInStatus } from "../services/twilio.service.js";
 
 export function registerTwilioRoutes(app: Express) {
   // Get opt-in status for an order

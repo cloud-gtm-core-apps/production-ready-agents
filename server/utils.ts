@@ -21,6 +21,158 @@ export const isAuthenticated = (req: any, res: any, next: any) => {
     res.status(401).json({ message: "Unauthorized" });
 };
 
+// Validates and normalizes order status string (accepts any case and converts to proper case)
+export function validateAndNormalizeStatus(status: string): string {
+  const validStatuses = ['New', 'Confirmed', 'Ready', 'Completed'];
+  // Convert to proper case: first letter uppercase, rest lowercase
+  const normalizedStatus = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+
+  if (!validStatuses.includes(normalizedStatus)) {
+    throw new Error('Invalid status');
+  }
+
+  return normalizedStatus;
+}
+
+// Formats messages for API response, keeping timestamps as ISO strings
+export function formatMessages(messages: Message[]) {
+  return messages.map((msg) => ({
+    id: msg.id,
+    text: msg.text,
+    isOutgoing: msg.isOutgoing,
+    timestamp: msg.timestamp, // Keep as ISO string, no conversion
+    isAIOrganized: msg.isAIOrganized
+  }));
+}
+
+// Formats customer name from first and last name (returns full name if both exist, otherwise first name or null)
+export function formatCustomerName(firstName: string | null, lastName: string | null): string | null {
+  if (firstName && lastName) {
+    return `${firstName} ${lastName}`;
+  }
+  return firstName || null;
+}
+
+// Calculates order count from order tag (handles "VIP (8x)" as 8, otherwise parses first digit, defaults to 1)
+export function calculateOrderCount(tag: string | null): number {
+  if (tag === 'VIP (8x)') {
+    return 8;
+  }
+  // Parse first digit from tag (e.g., "3x" -> 3, "1" -> 1)
+  return parseInt(tag?.charAt(0) || '1');
+}
+
+// Extracts pickup time from order notes (format: "PICKUP_TIME: 10:00 PM") or falls back to Date object
+export function extractPickupTimeFromNotes(notes: string | null, pickupTimeDate: Date | null): string | null {
+  // First, try to extract from notes (format: "PICKUP_TIME: 10:00 PM")
+  if (notes) {
+    const match = notes.match(/PICKUP_TIME:\s*([\d:]+?\s*(AM|PM))/i);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  // Fallback: if stored as Date, convert to string (shouldn't normally happen)
+  if (pickupTimeDate) {
+    return new Date(pickupTimeDate).toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    });
+  }
+
+  return null;
+}
+
+// Removes pickup time from notes string for display purposes
+export function removePickupTimeFromNotes(notes: string | null): string {
+  if (!notes) return '';
+  // Remove "PICKUP_TIME: 10:00 PM" pattern from notes
+  return notes.replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim();
+}
+
+// Validates pickup time string format (e.g., "10:00 PM", "9:30 AM")
+export function isValidPickupTimeFormat(pickupTime: string): boolean {
+  return /^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(pickupTime.trim());
+}
+
+// Validates and trims message string (throws error if empty)
+export function validateAndTrimMessage(message: string): string {
+  const trimmedMessage = typeof message === "string" ? message.trim() : "";
+
+  if (!trimmedMessage) {
+    throw new Error('Message is required');
+  }
+
+  return trimmedMessage;
+}
+
+// Extracts quantity from item string (e.g., "Burger x2" returns 2, "Pizza" returns 1)
+export function extractQuantityFromItemString(itemStr: string): { quantity: number; itemNameWithoutQuantity: string } {
+  const quantityMatch = itemStr.match(/\s*x(\d+)$/i);
+  if (quantityMatch) {
+    const quantity = parseInt(quantityMatch[1]);
+    const itemNameWithoutQuantity = itemStr.replace(/\s*x\d+$/i, '').trim();
+    return { quantity, itemNameWithoutQuantity };
+  }
+  return { quantity: 1, itemNameWithoutQuantity: itemStr };
+}
+
+// Extracts price from item string (e.g., "Burger: $9.99" returns 9.99, "Pizza" returns null)
+export function extractPriceFromItemString(itemStr: string): { totalPrice: number | null; itemNameWithoutPrice: string } {
+  const priceMatch = itemStr.match(/:\s*\$([\d.]+)/);
+  if (priceMatch) {
+    const totalPrice = parseFloat(priceMatch[1]);
+    const itemNameWithoutPrice = itemStr.replace(/:\s*\$[\d.]+.*$/, '').trim();
+    return { totalPrice, itemNameWithoutPrice };
+  }
+  return { totalPrice: null, itemNameWithoutPrice: itemStr };
+}
+
+// Builds order details object for API response (only includes if order has a price)
+export function buildOrderDetails(order: any) {
+  if (!order.orderPrice) {
+    return undefined;
+  }
+
+  const pickupTime = extractPickupTimeFromNotes(order.notes, order.pickupTime);
+
+  return {
+    items: order.items || [],
+    pickupTime: pickupTime,
+    pickupTimestamp: order.pickupTime ? new Date(order.pickupTime).getTime() : null,
+    total: order.orderPrice,
+    notes: removePickupTimeFromNotes(order.notes)
+  };
+}
+
+// Formats pickup time for confirmation message (uses orderDetails first, then falls back to order.pickupTime)
+export async function formatPickupTimeForMessage(orderDetails: any, order: any): Promise<string> {
+  // Use pickup time from orderDetails if it's a string (e.g., "10:00 PM")
+  if (orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string') {
+    return orderDetails.pickupTime.trim();
+  }
+
+  // Fallback: if stored as Date, convert to formatted string
+  if (order.pickupTime) {
+    const { formatRestaurantTime } = await import("./timezone.js");
+    return formatRestaurantTime(new Date(order.pickupTime));
+  }
+
+  // Default message if no pickup time available
+  return 'a later time today';
+}
+
+// Creates a confirmation message object for the customer
+export function createConfirmationMessage(pickupTime: string): Message {
+  return {
+    id: randomUUID(),
+    text: `Thanks for ordering! Your order is confirmed and will be ready for pickup at ${pickupTime}.`,
+    isOutgoing: false, // false = from business (appears on right side)
+    timestamp: new Date().toISOString(),
+  };
+}
+
 // Encryption utilities 
 
 const ENCRYPTION_KEY = process.env.SESSION_SECRET || '';
@@ -1009,71 +1161,6 @@ async function parsePickupTime(pickupTime?: string | Date): Promise<Date | null>
     }
 }
 
-export async function updateOrderFromDetails(
-    storage: any,
-    orderId: string,
-    orderDetails?: {
-        total?: string;
-        items?: string[];
-        notes?: string | null;
-        pickupTime?: string | Date;
-    },
-    options?: {
-        skipStatusUpdate?: boolean;
-    }
-) {
-    const updateData: {
-        orderPrice?: string;
-        items?: string[];
-        notes?: string | null;
-        pickupTime?: Date;
-    } = {};
-
-    if (orderDetails?.total) {
-        updateData.orderPrice = orderDetails.total;
-    }
-
-    if (orderDetails?.items && orderDetails.items.length > 0) {
-        updateData.items = orderDetails.items;
-    }
-
-    if (orderDetails?.notes !== undefined) {
-        updateData.notes = orderDetails.notes || null;
-    }
-
-    // Store pickup time string in notes field (append to existing notes if any)
-    // Format: "PICKUP_TIME: 10:00 PM" - we'll extract this when reading
-    if (orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string') {
-        const pickupTimeStr = orderDetails.pickupTime.trim();
-        if (pickupTimeStr.match(/\d{1,2}:\d{2}\s*(AM|PM)/i)) {
-            // Get existing notes (from orderDetails or fetch from DB if needed)
-            let existingNotes = (orderDetails.notes || '').toString();
-            // Remove any previous PICKUP_TIME entry
-            existingNotes = existingNotes.replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim();
-
-            // Append pickup time to notes (at the end, separated by newline)
-            const separator = existingNotes ? '\n\n' : '';
-            const newNotes = existingNotes + separator + `PICKUP_TIME: ${pickupTimeStr}`;
-            updateData.notes = newNotes;
-        }
-    }
-
-    // Handle notes update separately (if notes provided but no pickup time)
-    if (orderDetails?.notes !== undefined && !(orderDetails?.pickupTime && typeof orderDetails.pickupTime === 'string')) {
-        // If no pickup time but notes are provided, still update notes (remove old PICKUP_TIME if any)
-        let cleanedNotes = (orderDetails.notes || '').toString().replace(/PICKUP_TIME:\s*[\d:]+?\s*(AM|PM)/i, '').trim();
-        updateData.notes = cleanedNotes || null;
-    }
-
-    if (Object.keys(updateData).length > 0) {
-        await storage.updateOrderDetails(orderId, updateData);
-    }
-
-    if (!options?.skipStatusUpdate) {
-        await storage.updateOrderStatus(orderId, 'Confirmed');
-    }
-}
-
 export async function updateCloverOrder(
     storage: IStorage,
     userId: string,
@@ -1234,122 +1321,6 @@ export async function updateCloverOrder(
     }
 }
 
-export async function createCloverOrder(
-    storage: IStorage,
-    userId: string,
-    order: any,
-    orderDetails?: any
-) {
-    try {
-        // Fetch Clover token record
-        const tokenRecord = await db.select()
-            .from(oauthTokens)
-            .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, 'clover')))
-            .limit(1);
-
-        if (!tokenRecord[0]) return; // No Clover token, skip
-
-        // Decrypt or use fallback access token
-        const accessToken = process.env.MERCHENT_API_KEY || "";
-        const merchantId = tokenRecord[0].merchantId || 'H4RW04034BGH1';
-
-        // Fetch menu items for price matching
-        const menuItems = await storage.getMenuItems(userId);
-
-        // Parse order items into line items
-        const lineItems: Array<{ name?: string; price?: number; unitQty?: number }> = [];
-        const orderItems = orderDetails?.items || order.items || [];
-
-        if (orderItems.length === 0) {
-            console.log('[Clover] Skipping Clover order creation - no items in order');
-            return;
-        }
-
-        for (const itemStr of orderItems) {
-            console.log(`[Clover] Creating line item: ${itemStr}`);
-
-            let quantity = 1;
-            let itemNameWithPrice = itemStr;
-            const quantityMatch = itemStr.match(/\s*x(\d+)$/i);
-            if (quantityMatch) {
-                quantity = parseInt(quantityMatch[1]);
-                // Remove " x<number>" from string to get the item name + optional price
-                itemNameWithPrice = itemStr.replace(/\s*x\d+$/i, '').trim();
-            }
-
-            // Extract price if present: "Item Name: $9.99"
-            const priceMatch = itemNameWithPrice.match(/:\s*\$([\d.]+)/);
-            const totalPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
-
-            const itemName = itemNameWithPrice.replace(/:\s*\$[\d.]+.*$/, '').trim();
-
-            let unitPrice: number;
-            if (totalPrice !== null) {
-                unitPrice = totalPrice / quantity;
-            } else {
-                const matchingMenuItem = menuItems.find(mi =>
-                    mi.name.toLowerCase() === itemName.toLowerCase() ||
-                    itemName.toLowerCase().includes(mi.name.toLowerCase())
-                );
-                unitPrice = matchingMenuItem ? parseFloat(matchingMenuItem.price.replace(/[^0-9.]/g, '')) : 9.99;
-            }
-            console.log(`[Clover] Creating line item: ${itemName} - Unit price: ${unitPrice}, Quantity: ${quantity}`);
-            for (let i = 0; i < quantity; i++) {
-                const lineItem: any = { name: itemName, price: Math.round(unitPrice * 100) };
-                if (lineItem.price > 0) lineItems.push(lineItem);
-                else console.warn(`[Clover] Skipping invalid price line item: ${itemName} (${lineItem.price})`);
-            }
-        }
-
-        if (lineItems.length === 0) {
-            console.log('[Clover] Skipping Clover order creation - no valid line items parsed');
-            return;
-        }
-
-        let clientCreatedTime = Date.now();
-
-        // Build atomic order payload
-        const atomicOrderPayload: any = {
-            orderCart: { lineItems, clientCreatedTime },
-        };
-
-        if (order.firstName || order.lastName) {
-            atomicOrderPayload.title = `Order from ${order.firstName || ''} ${order.lastName || ''}`.trim();
-        }
-
-        if (orderDetails?.notes || order.notes) {
-            atomicOrderPayload.note = orderDetails?.notes || order.notes;
-        }
-
-        // Send order to Clover
-        console.log(`[Clover] Creating atomic order for merchant ${merchantId} with ${lineItems.length} items`);
-        const cloverResponse = await fetch(`https://sandbox.dev.clover.com/v3/merchants/${merchantId}/atomic_order/orders`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(atomicOrderPayload),
-        });
-
-        if (cloverResponse.ok) {
-            const cloverOrder = await cloverResponse.json() as { id?: string };
-            console.log(`[Clover] ✓ Successfully created order ${cloverOrder.id} in Clover`);
-
-            // Save Clover order ID to the order record
-            if (cloverOrder.id) {
-                await storage.updateOrderDetails(order.id, { cloverOrderId: cloverOrder.id });
-                console.log(`[Clover] Saved Clover order ID ${cloverOrder.id} to order ${order.id}`);
-            }
-        } else {
-            const errorText = await cloverResponse.text();
-            console.error(`[Clover] Failed to create order in Clover (${cloverResponse.status}):`, errorText);
-        }
-    } catch (error) {
-        console.error('[Clover] Error creating order in Clover:', error);
-    }
-}
-
 export async function sendMessageThroughRelay(to: string, message: string): Promise<void> {
     const trimmed = typeof message === "string" ? message.trim() : "";
   
@@ -1396,44 +1367,6 @@ export async function sendMessageThroughRelay(to: string, message: string): Prom
     }
 }
 
-export async function getOptInStatus(phoneNumber: string): Promise<OptInStatus | undefined> {
-    const redis = getRedisClient();
-    const cacheKey = `twilio:optin:${phoneNumber}`;
-  
-    // Try Redis first if available
-    if (redis) {
-      try {
-        const status = await redis.get(cacheKey);
-        if (status) {
-          return status as OptInStatus;
-        }
-      } catch (error) {
-        console.error(`[Twilio Opt-In] Redis get error for ${phoneNumber}:`, error);
-      }
-    }
-  
-    // Fallback to in-memory cache
-    return twilioOptInCache.get(phoneNumber);
-  }
-
-  export async function setOptInStatus(phoneNumber: string, status: OptInStatus): Promise<void> {
-    const redis = getRedisClient();
-    const cacheKey = `twilio:optin:${phoneNumber}`;
-  
-    // Store in Redis if available (with long TTL - 1 year for compliance)
-    if (redis) {
-      try {
-        // Store with TTL of 1 year (31536000 seconds)
-        await redis.setex(cacheKey, 31536000, status);
-        console.log(`[Twilio Opt-In] Stored status '${status}' in Redis for ${phoneNumber}`);
-      } catch (error) {
-        console.error(`[Twilio Opt-In] Redis set error for ${phoneNumber}:`, error);
-      }
-    }
-  
-    // Also store in in-memory cache as fallback
-    twilioOptInCache.set(phoneNumber, status);
-  }
 
 // Calculate total from order items
 export function calculateTotalFromItems(items?: string[]): string | undefined {
@@ -1779,6 +1712,7 @@ export async function checkForOrderDetection(
                                     updatePayload.notes = orderDetails.notes ?? null;
                                 }
 
+                                const { updateOrderFromDetails } = await import("./services/orders.service.js");
                                 await updateOrderFromDetails(
                                     storage,
                                     orderId,
