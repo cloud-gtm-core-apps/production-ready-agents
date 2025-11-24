@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { type Message } from "@shared/schema";
 import { storage } from "../storage.js";
-import { generateAISuggestedResponse, analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation } from "../aiFunctions.js";
+import { generateAISuggestedResponse, analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, detectHalfSandwichRequest } from "../aiFunctions.js";
 import { aiSuggestedResponses } from "../globals.js";
 import { sendMessageThroughRelay, emitSSE, triggerDebouncedOrderDetection, getMenuItemsWithCache, formatOrderMessage, validateAndTrimMessage } from "../utils.js";
 import { getOptInStatus } from "./twilio.service.js";
@@ -167,11 +167,47 @@ async function analyzeOrderFromConversation(
 ): Promise<{
   summaryResult: any;
   pickupTime: string | null;
+  lunchspecialrequest: boolean;
 }> {
   const summaryResult = await analyzeOrderSummaryFromConversation(messages, customerName, menuItems);
   const pickupTime = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+  const lunchspecialrequest = await detectHalfSandwichRequest(messages);
+  console.log(`[Order Detection2] Lunch special request: ${lunchspecialrequest}`);
 
-  return { summaryResult, pickupTime };
+  // If lunch special is requested, add it to summaryResult.orderDetails.items
+  if (lunchspecialrequest && summaryResult.orderDetails && menuItems && menuItems.length > 0) {
+    const lunchSpecial = menuItems.find(item => 
+      item.name.toLowerCase().includes('lunch') && 
+      item.name.toLowerCase().includes('special')
+    );
+
+    if (lunchSpecial) {
+      // Check if lunch special is already in the items
+      const lunchSpecialName = lunchSpecial.name.toLowerCase();
+      const alreadyPresent = summaryResult.orderDetails.items?.some((item: string) => {
+        const itemName = item.toLowerCase();
+        return itemName.includes(lunchSpecialName) || 
+               (itemName.includes('lunch') && itemName.includes('special'));
+      });
+
+      if (!alreadyPresent) {
+        // Add lunch special with price in the format "Item Name: $X.XX"
+        const priceNum = parseFloat(lunchSpecial.price.replace(/[^0-9.]/g, ''));
+        const formattedPrice = priceNum.toFixed(2);
+        const lunchSpecialItem = `${lunchSpecial.name}: $${formattedPrice}`;
+        
+        // Ensure items array exists
+        if (!summaryResult.orderDetails.items) {
+          summaryResult.orderDetails.items = [];
+        }
+        
+        summaryResult.orderDetails.items.push(lunchSpecialItem);
+        console.log(`[Order Detection] Added lunch special to summaryResult.orderDetails.items: ${lunchSpecialItem}`);
+      }
+    }
+  }
+
+  return { summaryResult, pickupTime, lunchspecialrequest };
 }
 
 // Builds order details with default values (customer name and pickup time if missing)
@@ -200,6 +236,7 @@ export async function getAIOrderSummary(userId: string, orderId: string): Promis
   orderMade: boolean;
   summary: string | null;
   details: any;
+  lunchspecialrequest: boolean;
 }> {
   // Get order and conversation from database
   const { order, messages } = await getOrderAndConversation(userId, orderId);
@@ -208,11 +245,47 @@ export async function getAIOrderSummary(userId: string, orderId: string): Promis
   const menuItems = await getMenuItemsWithCache(userId);
 
   // Analyze conversation messages to extract order summary and pickup time
-  const { summaryResult, pickupTime } = await analyzeOrderFromConversation(
+  const { summaryResult, pickupTime, lunchspecialrequest } = await analyzeOrderFromConversation(
     messages,
     order.firstName || undefined,
     menuItems
   );
+
+  // If lunch special is requested but no order was detected, create an order with just the lunch special
+  if (lunchspecialrequest && (!summaryResult.orderMade || !summaryResult.orderDetails)) {
+    const lunchSpecial = menuItems.find(item => 
+      item.name.toLowerCase().includes('lunch') && 
+      item.name.toLowerCase().includes('special')
+    );
+
+    if (lunchSpecial) {
+      const priceNum = parseFloat(lunchSpecial.price.replace(/[^0-9.]/g, ''));
+      const formattedPrice = priceNum.toFixed(2);
+      const lunchSpecialItem = `${lunchSpecial.name}: $${formattedPrice}`;
+      
+      // Create order details with just the lunch special
+      const orderDetails: any = {
+        customerName: order.firstName || order.number || "Customer",
+        items: [lunchSpecialItem],
+      };
+
+      // Add pickup time if detected
+      if (pickupTime) {
+        orderDetails.pickupTime = pickupTime;
+      }
+
+      const summary = formatOrderMessage(orderDetails, menuItems);
+      
+      console.log(`[Order Detection] Created order from lunch special request: ${lunchSpecialItem}`);
+      
+      return {
+        orderMade: true,
+        summary,
+        details: orderDetails,
+        lunchspecialrequest: lunchspecialrequest,
+      };
+    }
+  }
 
   // If no order was detected in conversation, return early
   if (!summaryResult.orderMade || !summaryResult.orderDetails) {
@@ -220,6 +293,7 @@ export async function getAIOrderSummary(userId: string, orderId: string): Promis
       orderMade: false,
       summary: null,
       details: summaryResult.orderDetails ?? null,
+      lunchspecialrequest: lunchspecialrequest,
     };
   }
 
@@ -233,6 +307,7 @@ export async function getAIOrderSummary(userId: string, orderId: string): Promis
     orderMade: true,
     summary,
     details: orderDetails,
+    lunchspecialrequest: lunchspecialrequest,
   };
 }
 

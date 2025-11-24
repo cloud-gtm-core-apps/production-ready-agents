@@ -135,6 +135,7 @@ export default function ConversationView({
   const [aiItems, setAiItems] = useState<string[] | undefined>(conversation.orderDetails?.items);
   const [aiNotes, setAiNotes] = useState<string | undefined>(conversation.orderDetails?.notes ?? undefined);
   const [aiPickupTime, setAiPickupTime] = useState<string | undefined>(conversation.orderDetails?.pickupTime ?? undefined);
+  const [lunchSpecialRequest, setLunchSpecialRequest] = useState<boolean>(false);
   const [autoStartEditing, setAutoStartEditing] = useState(false);
   const [aiOrderDetails, setAiOrderDetails] = useState<OrderDetails | null>(conversation.orderDetails ?? null);
   const [isSending, setIsSending] = useState(false);
@@ -342,25 +343,60 @@ export default function ConversationView({
     let cancelled = false;
 
     // Always refresh order summary when new messages arrive
-    const refreshOrderSummary = async () => {
+    // Add a delay on first fetch to allow backend order detection to complete
+    const refreshOrderSummary = async (delayMs = 0, retryCount = 0) => {
+      if (delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+
+      if (cancelled) return;
+
       try {
         const summaryRes = await fetch(`/api/orders/${conversation.id}/ai-order-summary`);
 
         if (!cancelled && summaryRes.ok) {
           const summaryData = await summaryRes.json();
-          if (summaryData?.details) {
+          
+          // If we got an order, stop retrying
+          if (summaryData?.details && summaryData.orderMade) {
             setAiItems(summaryData.details.items ?? undefined);
             setAiNotes(summaryData.details.notes ?? undefined);
             setAiPickupTime(summaryData.details.pickupTime ?? undefined);
+            setLunchSpecialRequest(summaryData.lunchspecialrequest ?? false);
             setAiOrderDetails(createOrderDetailsFromAIDetails(summaryData.details));
+            return; // Success - stop retrying
+          }
+
+          // If no order detected yet, retry with exponential backoff (max 3 retries)
+          if (!summaryData?.orderMade && retryCount < 3) {
+            // Retry at: 2.5s, 4.5s, 7s (giving backend more time for complex analyses)
+            const retryDelays = [2500, 4500, 7000];
+            const delay = retryDelays[retryCount] || 7000;
+            setTimeout(() => {
+              if (!cancelled) {
+                refreshOrderSummary(0, retryCount + 1);
+              }
+            }, delay);
+            return;
           }
         }
       } catch (error) {
         console.error('[ConversationView] Failed to refresh AI order summary:', error);
+        // Retry on error with exponential backoff (max 2 error retries)
+        if (retryCount < 2 && !cancelled) {
+          const retryDelays = [2000, 4000];
+          const delay = retryDelays[retryCount] || 4000;
+          setTimeout(() => {
+            if (!cancelled) {
+              refreshOrderSummary(0, retryCount + 1);
+            }
+          }, delay);
+        }
       }
     };
 
-    void refreshOrderSummary();
+    // Add initial delay for first order to allow backend order detection to start
+    void refreshOrderSummary(1000);
 
     // Clear any existing fallback timeout
     if (suggestionFallbackTimeoutRef.current) {
@@ -397,7 +433,73 @@ export default function ConversationView({
         suggestionFallbackTimeoutRef.current = null;
       }
     };
-  }, [conversation.id, conversation.messages, conversation.aiSuggestedResponse, aiSuggestedResponse]);
+  }, [conversation.id, conversation.messages.length, conversation.messages, conversation.aiSuggestedResponse, aiSuggestedResponse]);
+
+  // Poll for order summary on mount if conversation has customer messages but no order summary yet
+  // This handles cases where user opens conversation after message already arrived
+  useEffect(() => {
+    const hasCustomerMessages = conversation.messages.some(msg => msg.isOutgoing === true);
+    const hasOrderDetails = !!conversation.orderDetails;
+    const hasAiOrderDetails = !!aiOrderDetails;
+
+    // If there are customer messages but no order summary, poll immediately
+    if (hasCustomerMessages && !hasOrderDetails && !hasAiOrderDetails) {
+      console.log('[ConversationView] Mount check: Customer messages exist but no order summary, polling...');
+      
+      let cancelled = false;
+      const pollOnMount = async (retryCount = 0) => {
+        if (cancelled) return;
+
+        try {
+          const summaryRes = await fetch(`/api/orders/${conversation.id}/ai-order-summary`);
+          if (cancelled) return;
+
+          if (summaryRes.ok) {
+            const summaryData = await summaryRes.json();
+            
+            if (summaryData?.details && summaryData.orderMade) {
+              setAiItems(summaryData.details.items ?? undefined);
+              setAiNotes(summaryData.details.notes ?? undefined);
+              setAiPickupTime(summaryData.details.pickupTime ?? undefined);
+              setLunchSpecialRequest(summaryData.lunchspecialrequest ?? false);
+              setAiOrderDetails(createOrderDetailsFromAIDetails(summaryData.details));
+              return; // Success
+            }
+
+            // Retry if no order yet (max 2 retries on mount)
+            if (!summaryData?.orderMade && retryCount < 2) {
+              const retryDelays = [3000, 5000];
+              setTimeout(() => {
+                if (!cancelled) {
+                  pollOnMount(retryCount + 1);
+                }
+              }, retryDelays[retryCount]);
+            }
+          }
+        } catch (error) {
+          console.error('[ConversationView] Mount poll failed:', error);
+          // Retry once on error
+          if (retryCount === 0 && !cancelled) {
+            setTimeout(() => {
+              if (!cancelled) {
+                pollOnMount(1);
+              }
+            }, 3000);
+          }
+        }
+      };
+
+      // Small delay to avoid immediate duplicate polls
+      const timer = setTimeout(() => {
+        void pollOnMount();
+      }, 500);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
+    }
+  }, [conversation.id]); // Only run when conversation changes
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !onSendMessage) {

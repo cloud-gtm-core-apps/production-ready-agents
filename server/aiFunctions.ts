@@ -11,6 +11,8 @@ import {
     TrucubeConditionalOutput,
     OpenAIPickupTime,
     TrucubePickupTime,
+    OpenAIHalfSandwich,
+    TrucubeHalfSandwich,
 } from "./utils.js";
 
 export type OrderSummaryDetails = {
@@ -25,10 +27,16 @@ export type OrderSummaryResult = {
     orderDetails?: OrderSummaryDetails;
 };
 
-function buildOrderSummaryPrompt(currentTimeString: string, menuContext: string) {
+function buildOrderSummaryPrompt(menuContext: string) {
     return `You are an order detection system for a restaurant. Analyze the conversation and determine if the customer has placed an order.
   
-  IMPORTANT: Current time is ${currentTimeString}. When a pickup time is mentioned, you MUST convert it to an absolute time.${menuContext}
+  IMPORTANT: ${menuContext}
+  
+  CRITICAL RULES:
+  - ONLY include items that are in the menu provided above. NEVER include items that are not in the menu.
+  - NEVER include 1/2 sandwich requests, half sandwich requests, or any variation of half sandwich orders.
+  - If a customer mentions a 1/2 sandwich, half sandwich, or any half portion request, completely ignore it and do not include it in the order.
+  - If an item mentioned is not found in the menu, exclude it completely from the order.
   
   If an order has been placed, extract:
   1. Customer name (if mentioned)
@@ -39,32 +47,8 @@ function buildOrderSummaryPrompt(currentTimeString: string, menuContext: string)
      - For quantities, include quantity and calculate total price: "2x Item Name: $X.XX" (where $X.XX is the total for that quantity)
      - Include customizations or modifications in the item name: "Item Name (customization): $X.XX"
      - If an item is mentioned but not in the menu, do not include it as mentioned (without price if unknown)
-  3. Pickup time (if mentioned):
-     - If relative time is mentioned (e.g., "in 1 hour", "30 minutes", "15 min", "half an hour"), convert it to absolute time based on current time (${currentTimeString})
-     - If absolute time is mentioned (e.g., "3:30 PM", "5pm"), use it as-is
-     - If time is mentioned WITHOUT AM/PM (e.g., "3", "3:00", "5", "12"), intelligently infer AM/PM:
-       * If the time is within 1-2 hours of current time, use the same period (AM/PM) as current time
-       * If the time is far from current time, assume PM for times 1-9 (business hours) and AM for times 10-11 (morning)
-       * For "12" without AM/PM: if current time is before noon, assume "12 PM" (noon); if after noon, assume "12 PM" next day
-       * Restaurant is typically open 10 AM - 9 PM, so prefer PM for afternoon/evening times
-       * Example: Current time is 2:00 PM, customer says "3" → return "3:00 PM"
-       * Example: Current time is 10:00 PM, customer says "3" → return "3:00 PM" (next day, not 3 AM)
-       * Example: Current time is 11:00 AM, customer says "12" → return "12:00 PM" (noon)
-       * Example: Current time is 1:00 PM, customer says "12" → return "12:00 PM" (next day, not midnight)
-     - Format as "HH:MM AM/PM" (e.g., "3:30 PM", "5:00 PM", "12:00 PM")
-     - Example: If current time is 2:00 PM and customer says "in 1 hour", return "3:00 PM"
-     - Example: If current time is 2:00 PM and customer says "in 30 minutes", return "2:30 PM"
-     - Pay strict attention to the entire conversation and note when the pickup time changes.
-  4. Any special notes or instructions
-
-IMPORTANT EDGE CASES TO CHECK:
-1. Half Sandwich Request:
-   - IMPORTANT ORDERING RULES: All sandwiches are sold whole. The Lunch special is the only way someone can get a ½ sandwich.
-   - If a customer requests half a sandwich, locate the Lunch special in the menu and add it to the items.
-   - The Lunch special should be added with the correct price from the menu.
-
-If an edge case is detected, you must:
-1. Convert any half sandwich requests to just the lunch special.
+     - NEVER include half portions, 1/2 sandwiches, or any items not in the menu
+  3. Any special notes or instructions
 
 Return only valid JSON, no markdown code blocks, and no explanations.
 JSON format:
@@ -73,7 +57,6 @@ JSON format:
   "orderDetails": {
       "customerName": string,
       "items": string[],
-      "pickupTime"?: string,
       "notes"?: string
   }
 }
@@ -105,7 +88,7 @@ export async function analyzeOrderSummaryFromConversation(
 
     const conversationText = formatConversation(messages);
     const menuContext = buildMenuContext(menuItems);
-    const systemPrompt = buildOrderSummaryPrompt(currentTimeString, menuContext);
+    const systemPrompt = buildOrderSummaryPrompt(menuContext);
 
     try {
         const getOrderSummary =
@@ -214,6 +197,57 @@ If no pickup time is mentioned or confirmed, return:
     } catch (error) {
         console.error("Error detecting pickup time from conversation:", error);
         return null;
+    }
+}
+
+/**
+ * Detects if customer wants a half sandwich from conversation.
+ * Returns true if the customer currently intends to order a 1/2 sandwich, otherwise false.
+ */
+export async function detectHalfSandwichRequest(
+    messages: Message[]
+): Promise<boolean> {
+    // Filter out AI-organized messages
+    const conversationMessages = messages.filter(msg => !msg.isAIOrganized);
+    
+    if (conversationMessages.length === 0) {
+        return false;
+    }
+    const conversationText = formatConversation(conversationMessages);
+
+    // Build system prompt for half sandwich detection
+    const systemPrompt = `You are a 1/2-sandwich detection system for a restaurant ordering assistant.
+You will be given the full conversation history between a customer and the system.
+
+Your ONLY job is to determine whether the customer **currently intends to order a 1/2 sandwich**.
+
+IMPORTANT RULES & EDGE CASES:
+
+- The customer may change their mind at any time. You must consider ONLY the *latest* intention expressed in the conversation.
+- If the user first requests a 1/2 sandwich but later cancels, rejects, modifies, or switches to another item, the final result must be false.
+- If the customer expresses uncertainty ("maybe a half?", "not sure") you must treat it as **false** unless they explicitly confirm they want it.
+- If a customer asks a question ("do you have half sandwiches?") this does NOT count as ordering.
+- If the customer mentions "half" in a non-food context, it must be ignored.
+- If the user orders multiple items, return true only if one of them is a 1/2 sandwich.
+- If they ask to modify or customize a 1/2 sandwich, treat it as true unless they later cancel.
+- If the final state of the conversation is ambiguous, return false.
+
+The response must ALWAYS be a JSON object in this format:
+
+{
+  "wantsHalfSandwich": true | false
+}
+
+You MUST respond with nothing else.`;
+
+    try {
+        const getHalfSandwich = process.env.MODEL === "TRUCUBE" ? TrucubeHalfSandwich : OpenAIHalfSandwich;
+        
+        const response = await getHalfSandwich(systemPrompt, conversationText);
+        return response.wantsHalfSandwich || false;
+    } catch (error) {
+        console.error("Error detecting half sandwich request from conversation:", error);
+        return false;
     }
 }
 

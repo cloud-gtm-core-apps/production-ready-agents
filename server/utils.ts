@@ -9,7 +9,7 @@ import { oauthTokens } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { getRedisClient, getRedisSubscriber } from "./redis.js";
-import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation } from "./aiFunctions.js";
+import { analyzeOrderSummaryFromConversation, detectPickupTimeFromConversation, detectHalfSandwichRequest } from "./aiFunctions.js";
 
 
 // Check if user is authenticated
@@ -1119,6 +1119,87 @@ export async function TrucubePickupTime(
     }
 }
 
+// Call OpenAI API for Half Sandwich Detection
+export async function OpenAIHalfSandwich(
+    systemPrompt: string,
+    conversationText: string
+): Promise<{
+    wantsHalfSandwich: boolean;
+}> {
+    const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Analyze this conversation:\n\n${conversationText}` }
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+    });
+
+    try {
+        return JSON.parse(completion.choices[0].message.content || '{"wantsHalfSandwich": false}');
+    } catch (error) {
+        console.error("Error parsing OpenAI half sandwich response:", error);
+        return { wantsHalfSandwich: false };
+    }
+}
+
+// Call Trucube API for Half Sandwich Detection
+export async function TrucubeHalfSandwich(
+    systemPrompt: string,
+    conversationText: string
+): Promise<{
+    wantsHalfSandwich: boolean;
+}> {
+    const BEARER_TOKEN = process.env.TRUCUBE_BEARER_TOKEN;
+    if (!BEARER_TOKEN) {
+        throw new Error("TRUCUBE_BEARER_TOKEN is not set");
+    }
+
+    try {
+        const response = await fetch("http://98.15.217.173:3000/api/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${BEARER_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: "llama3.1:latest",
+                messages: [
+                    {
+                        role: "system",
+                        content: systemPrompt,
+                    },
+                    {
+                        role: "user",
+                        content: `Analyze this conversation:\n\n${conversationText}`,
+                    },
+                ],
+                stream: false,
+            }),
+        });
+
+        const data = await response.json() as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
+        const assistantMessage = data?.choices?.[0]?.message?.content;
+
+        if (!assistantMessage) {
+            return { wantsHalfSandwich: false };
+        }
+
+        try {
+            return JSON.parse(assistantMessage);
+        } catch (error) {
+            console.error("Error parsing Trucube half sandwich response:", assistantMessage, error);
+            return { wantsHalfSandwich: false };
+        }
+    } catch (error) {
+        console.error("Error calling Trucube API for half sandwich:", error);
+        return { wantsHalfSandwich: false };
+    }
+}
+
 // Random name generator for test conversations (Dearborn demographic)
 const FIRST_NAMES = ['Fatima', 'Ahmed', 'Nour', 'Layla', 'Hassan', 'Zainab', 'Youssef', 'Rania', 'Omar', 'Maryam', 'Ali', 'Dina', 'Karim', 'Sara', 'Hadi', 'Mariam', 'Bilal', 'Lina', 'Tariq', 'Amira'];
 const LAST_NAMES = ['Hassan', 'Ali', 'Bakri', 'Mansour', 'Khalil', 'Ahmad', 'Hammoud', 'Saleh', 'Ibrahim', 'Farah', 'Rahman', 'Mustafa', 'Nasser', 'Khoury', 'Masri', 'Saad'];
@@ -1576,12 +1657,49 @@ export async function checkForOrderDetection(
                     menuItems
                 );
 
+                const detectedPickupTime = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
+                const lunchspecialrequest = await detectHalfSandwichRequest(messages);
+
+                console.log(`[Order Detection] Lunch special request: ${lunchspecialrequest}`);
+
+                // If lunch special is requested, add it to summaryResult.orderDetails.items
+                if (lunchspecialrequest && summaryResult.orderDetails && menuItems && menuItems.length > 0) {
+                    const lunchSpecial = menuItems.find(item => 
+                        item.name.toLowerCase().includes('lunch') && 
+                        item.name.toLowerCase().includes('special')
+                    );
+
+                    if (lunchSpecial) {
+                        // Check if lunch special is already in the items
+                        const lunchSpecialName = lunchSpecial.name.toLowerCase();
+                        const alreadyPresent = summaryResult.orderDetails.items?.some((item: string) => {
+                            const itemName = item.toLowerCase();
+                            return itemName.includes(lunchSpecialName) || 
+                                   (itemName.includes('lunch') && itemName.includes('special'));
+                        });
+
+                        if (!alreadyPresent) {
+                            // Add lunch special with price in the format "Item Name: $X.XX"
+                            const priceNum = parseFloat(lunchSpecial.price.replace(/[^0-9.]/g, ''));
+                            const formattedPrice = priceNum.toFixed(2);
+                            const lunchSpecialItem = `${lunchSpecial.name}: $${formattedPrice}`;
+                            
+                            // Ensure items array exists
+                            if (!summaryResult.orderDetails.items) {
+                                summaryResult.orderDetails.items = [];
+                            }
+                            
+                            summaryResult.orderDetails.items.push(lunchSpecialItem);
+                            console.log(`[Order Detection] Added lunch special to summaryResult.orderDetails.items: ${lunchSpecialItem}`);
+                        }
+                    }
+                }
+
                 const analysis = {
                     orderMade: summaryResult.orderMade,
                     orderDetails: summaryResult.orderDetails ? { ...summaryResult.orderDetails } : undefined,
                 };
 
-                const detectedPickupTime = await detectPickupTimeFromConversation(messages, { referenceTime: new Date() });
                 if (analysis.orderDetails) {
                     if (!analysis.orderDetails.customerName) {
                         analysis.orderDetails.customerName = order.firstName || order.number || "Customer";
@@ -1592,12 +1710,33 @@ export async function checkForOrderDetection(
                     }
                 }
 
-                console.log(`[Order Detection] Analysis result for order ${orderId}:`, {
-                    orderMade: analysis.orderMade,
-                    hasDetails: !!analysis.orderDetails,
-                    pickupTime: analysis.orderDetails?.pickupTime,
-                    pickupTimeType: typeof analysis.orderDetails?.pickupTime
-                });
+                // If lunch special is requested but no order was detected, create an order with just the lunch special
+                if (lunchspecialrequest && (!analysis.orderMade || !analysis.orderDetails)) {
+                    const lunchSpecial = menuItems.find(item => 
+                        item.name.toLowerCase().includes('lunch') && 
+                        item.name.toLowerCase().includes('special')
+                    );
+
+                    if (lunchSpecial) {
+                        const priceNum = parseFloat(lunchSpecial.price.replace(/[^0-9.]/g, ''));
+                        const formattedPrice = priceNum.toFixed(2);
+                        const lunchSpecialItem = `${lunchSpecial.name}: $${formattedPrice}`;
+                        
+                        // Create order details with just the lunch special
+                        analysis.orderMade = true;
+                        analysis.orderDetails = {
+                            customerName: order.firstName || order.number || "Customer",
+                            items: [lunchSpecialItem],
+                        };
+
+                        // Add pickup time if detected
+                        if (detectedPickupTime) {
+                            analysis.orderDetails.pickupTime = detectedPickupTime;
+                        }
+
+                        console.log(`[Order Detection] Created order from lunch special request in checkForOrderDetection: ${lunchSpecialItem}`);
+                    }
+                }
 
                 if (analysis.orderMade && analysis.orderDetails) {
                     // If there's a previous AI organized message, compare the new analysis with it
@@ -1695,20 +1834,6 @@ export async function checkForOrderDetection(
                         const newNotes = analysis.orderDetails.notes?.trim() || null;
                         const notesChanged = cleanedPreviousNotes !== newNotes;
 
-                        console.log(`[Order Detection] Comparison results:`, {
-                            itemsChanged,
-                            pickupTimeChanged,
-                            notesChanged,
-                            previousItems: previousItemsNormalized,
-                            newItems: newItemsNormalized,
-                            previousItemsCount: previousItemsNormalized.length,
-                            newItemsCount: newItemsNormalized.length,
-                            previousPickupTime,
-                            newPickupTime,
-                            previousNotes: cleanedPreviousNotes,
-                            newNotes
-                        });
-
                         // Only skip if nothing changed
                         if (!itemsChanged && !pickupTimeChanged && !notesChanged) {
                             console.log(`[Order Detection] Order details unchanged, skipping new AI organized message`);
@@ -1770,11 +1895,6 @@ export async function checkForOrderDetection(
                         // Ensure orderDetails exists (it should at this point, but TypeScript needs the check)
                         const orderDetails = analysis.orderDetails;
                         if (orderDetails) {
-                            console.log(`[Order Detection] Prepared structured order details for order ${orderId}:`, {
-                                items: orderDetails.items,
-                                notes: orderDetails.notes,
-                                pickupTime: orderDetails.pickupTime,
-                            });
 
                             try {
                                 const derivedTotal = calculateTotalFromItems(orderDetails.items);
