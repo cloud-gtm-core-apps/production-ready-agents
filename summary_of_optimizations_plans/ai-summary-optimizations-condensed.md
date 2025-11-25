@@ -30,7 +30,7 @@
 *   [Optimize Hyperparameters](ai-summary-optimizations.md#ai-hyperparameter-tuning) (Temp=0, negative prompting)
 *   [Multi-Shot Prompting](ai-summary-optimizations.md#multi-shot-prompting)
 *   [Negative Prompting](ai-summary-optimizations.md#negative-prompting)
-*   Switch to top benchmark models (e.g. GPT 5, Gemini 2.5 pro/flash)
+*   [Switch to top benchmark models](ai-summary-optimizations.md#model-comparison-details) (e.g. GPT 5, Gemini 2.5 pro/flash)
 *   [Pin Model Versions](ai-summary-optimizations.md#pin-model-versions)
 *   [Self-Correction Loop](ai-summary-optimizations.md#self-correction-loop)
 *   Add [retry logic](ai-summary-optimizations.md#retry-logic-with-backoff)
@@ -38,21 +38,21 @@
 Note* High impact low lift
 
 ### Phase 2: Memory & Efficiency (Week 3-4)
-*   Deploy Sliding Window context management.
-*   Add Semantic Caching to reduce redundant calls.
+*   [Deploy Sliding Window context management](ai-summary-optimizations.md#sliding-window-conversation-memory).
+*   [Add Semantic Caching](ai-summary-optimizations.md#semantic-caching) to reduce redundant calls.
 *   *Impact: 60-80% cost reduction, faster responses.*
 
 ### Phase 3: Intelligence (Month 2)
-*   Build Customer Profile Memory & Metrics Dashboard.
-*   Start A/B Testing Framework.
+*   [Build Customer Profile Memory](ai-summary-optimizations.md#customer-profile-memory) & [Metrics Dashboard](ai-summary-optimizations.md#metrics-monitoring-dashboard).
+*   [Start A/B Testing Framework](ai-summary-optimizations.md#ab-testing-framework).
 *   *Impact: Data-driven optimization.*
 
 ### Phase 4: Advanced (Month 3+)
-*   Vector Semantic Memory & Menu RAG.
-*   Fine-tuning custom models (Long-term ROI).
+*   [Vector Semantic Memory](ai-summary-optimizations.md#vector-database-semantic-memory) & [Menu RAG](ai-summary-optimizations.md#rag-for-menu-context).
+*   [Fine-tuning custom models](ai-summary-optimizations.md#fine-tuning-custom-model) (Long-term ROI).
 
 ## Model Strategy & Cost Analysis
-**Recommendation: Hybrid Strategy**
+**Recommendation: [Hybrid Strategy](ai-summary-optimizations.md#model-switching-strategy)**
 *   Use **GPT-4o-mini** (or Gemini 2.0 Flash) for 80% of simple orders.
 *   Fallback to **Gemini 2.0 Pro** / **GPT-4o** only for complex/low-confidence cases (20%).
 *   *Result*: ~90% accuracy at ~$150/mo (vs $750/mo for all-premium).
@@ -62,8 +62,8 @@ Note* High impact low lift
 *   Use Flash for larger context/better reasoning at low cost.
 *   Use Pro/Sonnet only for critical failures or complex edge cases.
 
-## Success Metrics & Conclusion
+## [Success Metrics & Conclusion](ai-summary-optimizations.md#success-metrics)
 **Track:** Order Detection Rate, Item Extraction Accuracy, Hallucination Rate, Cost Per Order.
 
 **The 80/20 Rule:**
-Phase 1 & 2 (Structured Outputs + Sliding Window) require only **2-3 weeks** but deliver **80% of the benefit** (high accuracy + low cost). Start there immediately.
+Phase 1 & 2 ([Structured Outputs](ai-summary-optimizations.md#structured-outputs-with-zod-schemas) + [Sliding Window](ai-summary-optimizations.md#sliding-window-conversation-memory)) require only **2-3 weeks** but deliver **80% of the benefit** (high accuracy + low cost). Start there immediately.

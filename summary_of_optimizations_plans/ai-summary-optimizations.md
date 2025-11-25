@@ -21,7 +21,7 @@ The current AI system sends **entire conversation history** and **full menu** on
 
 Quick wins with minimal code changes, maximum impact.
 
-### 1. **Structured Outputs with Zod Schemas**
+### 1. **Structured Outputs with Zod Schemas** <a id="structured-outputs-with-zod-schemas"></a>
 **Problem:** AI returns inconsistent JSON formats
 **Solution:** Force AI to output valid, typed JSON every time
 
@@ -102,7 +102,7 @@ const completion = await openai.chat.completions.create({
 
 ---
 
-### 2. **Confidence Scoring**
+### 2. **Confidence Scoring** <a id="confidence-scoring"></a>
 **Problem:** AI always returns an answer, even when uncertain
 **Solution:** Ask AI to rate its confidence (high/medium/low)
 
@@ -124,7 +124,7 @@ confidence: z.enum(['high', 'medium', 'low'])
 
 ---
 
-### 3. **Business Logic Validators**
+### 3. **Business Logic Validators** <a id="business-logic-validators"></a>
 **Problem:** AI outputs sometimes violate business rules
 **Solution:** Validate AI outputs with code before saving
 
@@ -141,7 +141,7 @@ confidence: z.enum(['high', 'medium', 'low'])
 
 ---
 
-### 4. **Pin Model Versions**
+### 4. **Pin Model Versions** <a id="pin-model-versions"></a>
 **Problem:** Model updates change behavior unpredictably
 **Solution:** Use specific model version instead of "latest"
 
@@ -161,7 +161,7 @@ model: 'gpt-4o-mini-2024-07-18'  // Specific version
 
 ---
 
-### 5. **Negative Prompting**
+### 5. **Negative Prompting** <a id="negative-prompting"></a>
 **Problem:** AI makes specific repeated mistakes
 **Solution:** Explicitly tell AI what NOT to do
 
@@ -180,7 +180,7 @@ CRITICAL RULES:
 
 ---
 
-### 6. **Chain-of-Thought (CoT) Reasoning**
+### 6. **Chain-of-Thought (CoT) Reasoning** <a id="chain-of-thought-cot-reasoning"></a>
 **Problem:** Hard to debug why AI made a decision
 **Solution:** Ask AI to explain its logic first
 
@@ -197,7 +197,7 @@ reasoning: z.string().describe("Explain your logic step-by-step")
 
 ---
 
-### 7. **Temperature = 0 for Extraction**
+### 7. **Temperature = 0 for Extraction** <a id="temperature-0-for-extraction"></a>
 **Problem:** Non-deterministic outputs for same input
 **Solution:** Set temperature to 0 for order detection
 
@@ -212,7 +212,7 @@ temperature: 0  // Instead of 0.3 or 0.7
 
 ---
 
-### 8. **Multi-Shot Prompting**
+### 8. **Multi-Shot Prompting** <a id="multi-shot-prompting"></a>
 **Problem:** AI doesn't understand edge cases (like "half sandwich")
 **Solution:** Show AI 3-5 examples in the prompt using real conversations
 
@@ -324,7 +324,7 @@ Expected Output:
 
 ---
 
-### 9. **Retry Logic with Backoff**
+### 9. **Retry Logic with Backoff** <a id="retry-logic-with-backoff"></a>
 **Problem:** AI occasionally fails or times out
 **Solution:** Retry failed requests with exponential backoff
 
@@ -339,7 +339,7 @@ Expected Output:
 
 ---
 
-### 10. **AI Hyperparameter Tuning**
+### 10. **AI Hyperparameter Tuning** <a id="ai-hyperparameter-tuning"></a>
 **Problem:** Default settings may not be optimal for order extraction
 **Solution:** Fine-tune temperature, top_p, frequency/presence penalties
 
@@ -440,7 +440,7 @@ logit_bias: {
 
 Bigger improvements requiring more infrastructure.
 
-### 10. **Sliding Window (Conversation Memory)**
+### 10. **Sliding Window (Conversation Memory)** <a id="sliding-window-conversation-memory"></a>
 **Problem:** Sending 50+ messages costs too much, slows down responses
 **Solution:** Only send last 10 messages + summary of older ones
 
@@ -464,7 +464,7 @@ Savings: 67% 💰
 
 ---
 
-### 11. **Semantic Caching**
+### 11. **Semantic Caching** <a id="semantic-caching"></a>
 **Problem:** Similar conversations call AI repeatedly
 **Solution:** Cache AI responses based on conversation content
 
@@ -480,7 +480,7 @@ Savings: 67% 💰
 
 ---
 
-### 12. **Customer Profile Memory**
+### 12. **Customer Profile Memory** <a id="customer-profile-memory"></a>
 **Problem:** AI doesn't know customer's usual orders or preferences
 **Solution:** Build customer profiles from order history
 
@@ -508,7 +508,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 13. **Important Facts Extraction**
+### 13. **Important Facts Extraction** <a id="important-facts-extraction"></a>
 **Problem:** Customer mentions allergy once, AI forgets it later
 **Solution:** Auto-extract and persist important facts
 
@@ -524,7 +524,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 14. **Conversation Compression**
+### 14. **Conversation Compression** <a id="conversation-compression"></a>
 **Problem:** Greetings and fillers waste tokens
 **Solution:** Filter out irrelevant messages before sending to AI
 
@@ -539,7 +539,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 15. **Self-Correction Loop**
+### 15. **Self-Correction Loop** <a id="self-correction-loop"></a>
 **Problem:** AI makes mistakes it could catch itself
 **Solution:** Ask AI to validate its own output
 
@@ -555,7 +555,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 16. **Metrics & Monitoring Dashboard**
+### 16. **Metrics & Monitoring Dashboard** <a id="metrics-monitoring-dashboard"></a>
 **Problem:** Don't know if AI is improving or degrading
 **Solution:** Track accuracy, confidence, latency over time
 
@@ -571,7 +571,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 17. **A/B Testing Framework**
+### 17. **A/B Testing Framework** <a id="ab-testing-framework"></a>
 **Problem:** Don't know which prompt is better
 **Solution:** Test multiple prompts and measure results
 
@@ -588,7 +588,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 18. **Conversation Stage Detection**
+### 18. **Conversation Stage Detection** <a id="conversation-stage-detection"></a>
 **Problem:** Same prompt for all conversation stages
 **Solution:** Detect stage and use stage-specific instructions
 
@@ -602,7 +602,7 @@ AI: Knows it's Burger + Fries
 
 ---
 
-### 19. **Ambiguity Detection**
+### 19. **Ambiguity Detection** <a id="ambiguity-detection"></a>
 **Problem:** "5:30" could be AM or PM
 **Solution:** Ask AI to flag ambiguous inputs
 
@@ -627,7 +627,7 @@ ambiguities: [
 
 Advanced strategies for production-scale systems.
 
-### 20. **Vector Database Semantic Memory**
+### 20. **Vector Database Semantic Memory** <a id="vector-database-semantic-memory"></a>
 **Problem:** Can't find similar past conversations
 **Solution:** Store conversation embeddings, search semantically
 
@@ -655,7 +655,7 @@ AI uses that context to answer better
 
 ---
 
-### 21. **RAG for Menu Context**
+### 21. **RAG for Menu Context** <a id="rag-for-menu-context"></a>
 **Problem:** Sending 100-item menu in every prompt
 **Solution:** Vector search to find only relevant menu items
 
@@ -671,7 +671,7 @@ AI uses that context to answer better
 
 ---
 
-### 22. **Fine-Tuning Custom Model**
+### 22. **Fine-Tuning Custom Model** <a id="fine-tuning-custom-model"></a>
 **Problem:** Generic models don't understand your specific menu/patterns
 **Solution:** Train custom model on 500-1000 real conversations
 
@@ -688,7 +688,7 @@ AI uses that context to answer better
 
 ---
 
-### 23. **Ensemble Voting**
+### 23. **Ensemble Voting** <a id="ensemble-voting"></a>
 **Problem:** Critical orders need highest accuracy
 **Solution:** Call AI 3 times with different temperatures, vote on result
 
@@ -704,7 +704,7 @@ AI uses that context to answer better
 
 ---
 
-### 24. **Entity Extraction Preprocessing**
+### 24. **Entity Extraction Preprocessing** <a id="entity-extraction-preprocessing"></a>
 **Problem:** AI has to find items, times, names from scratch
 **Solution:** Use lightweight NER model to pre-extract candidates
 
@@ -720,7 +720,7 @@ AI uses that context to answer better
 
 ---
 
-### 25. **Constrained Generation (Logit Bias)**
+### 25. **Constrained Generation (Logit Bias)** <a id="constrained-generation-logit-bias"></a>
 **Problem:** AI occasionally outputs invalid menu item names
 **Solution:** Bias token probabilities toward valid menu items
 
@@ -736,7 +736,7 @@ AI uses that context to answer better
 
 ---
 
-### 26. **Incremental Conversation Summarization**
+### 26. **Incremental Conversation Summarization** <a id="incremental-conversation-summarization"></a>
 **Problem:** Re-summarizing 50 messages every time is slow
 **Solution:** Update summary incrementally as new messages arrive
 
@@ -752,7 +752,7 @@ AI uses that context to answer better
 
 ---
 
-### 27. **Cross-Customer Learning**
+### 27. **Cross-Customer Learning** <a id="cross-customer-learning"></a>
 **Problem:** Every customer starts from zero knowledge
 **Solution:** Learn patterns across all customers
 
@@ -767,7 +767,7 @@ AI uses that context to answer better
 
 ---
 
-### 28. **Model Fallback Chain**
+### 28. **Model Fallback Chain** <a id="model-fallback-chain"></a>
 **Problem:** Single model failure = total failure
 **Solution:** Chain of models (cheap → expensive)
 
@@ -785,7 +785,7 @@ Try gpt-4o-mini (fast, cheap)
 
 ---
 
-### 29. **Partial Success Handling**
+### 29. **Partial Success Handling** <a id="partial-success-handling"></a>
 **Problem:** If AI can't extract pickup time, whole order fails
 **Solution:** Extract what you can, flag what you can't
 
@@ -808,7 +808,7 @@ Try gpt-4o-mini (fast, cheap)
 
 ---
 
-### 30. **Role-Based Prompting**
+### 30. **Role-Based Prompting** <a id="role-based-prompting"></a>
 **Problem:** Generic AI voice
 **Solution:** Give AI a specific persona
 
@@ -920,9 +920,7 @@ Customer: "Ya"
 **Conversation (from sample Conversation 3.5):**
 ```
 Restaurant: "Corn On The Corner, This is our storefront location..."
-Customer: "1/2 Nashville grilled chicken spicy
-Azer Khan
-630 pm"
+Customer: "1/2 Nashville grilled chicken spicy\nAzer Khan\n630 pm"
 Customer: "does it come with fries?"
 Restaurant: "Hey sorry about that we can't do half grilled cheeses!"
 ```
@@ -979,7 +977,7 @@ function validateOrderOutput(aiOutput) {
   });
 
   if (errors.length > 0) {
-    return {
+    return { 
       valid: false,
       errors,
       correctedOutput: { orderMade: false, items: [] }
@@ -1323,7 +1321,7 @@ Output:
 | **Switch to Claude 3.5 Sonnet** | 1-2 hrs | +800-1000% | +20-30% | ⭐⭐⭐ (excellent reasoning) |
 | **Future: GPT-5 / Gemini 3** | 1 hr | +2000-3000%? | +30-50%? | ⭐ (wait for release) |
 
-### Model Comparison Details
+### Model Comparison Details <a id="model-comparison-details"></a>
 
 **Current: GPT-4o-mini**
 - Cost: $0.15/1M input tokens, $0.60/1M output tokens
@@ -1365,7 +1363,7 @@ Output:
 - Expected: 30-50% accuracy improvement
 - **Recommendation:** Wait for release, benchmark, then decide
 
-### Model Switching Strategy
+### Model Switching Strategy <a id="model-switching-strategy"></a>
 
 **Option 1: Single Model Upgrade**
 ```typescript
@@ -1450,7 +1448,7 @@ try {
 
 ---
 
-## 🎯 Success Metrics
+## 🎯 Success Metrics <a id="success-metrics"></a>
 
 Track these KPIs to measure improvement:
 
