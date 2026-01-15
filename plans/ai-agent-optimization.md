@@ -3,7 +3,7 @@
 ## 📋 Todo Checklist
 - [ ] **Infrastructure**: Set up `@google-cloud/vertexai` SDK and GCP authentication.
 - [ ] **Configuration**: Pin `Gemini 3.0 Flash` versions and externalize safety settings.
-- [ ] **Determinism**: Implement Controlled Generation using `responseSchema` and MIME type `application/json`.
+- [ ] **Determinism**: Implement Controlled Generation using data structure validations, rag, retries, llm routing, limiting context, and safety filters.
 - [ ] **Context Management**: Implement Vertex AI Context Caching for large menus/history.
 - [ ] **Latency & Cost**: Use `Gemini 3.0 Flash` for high throughput and low latency.
 - [ ] **Reliability**: Implement strict safety settings and retry policies.
@@ -22,7 +22,7 @@
 
 | Factor | Current Strategy | GCP/Gemini Optimization |
 | :--- | :--- | :--- |
-| **1. Determinism** | OpenAI JSON Mode | **Controlled Generation** (`responseSchema` + `application/json`). |
+| **1. Determinism** | OpenAI JSON Mode | Implement Controlled Generation using data structure validations, rag, retries, llm routing, limiting context, and safety filters. |
 | **2. Tokens** | Full Re-send | **Context Caching** (cache the menu preamble once, reuse). |
 | **3. Caching** | None | **Vertex AI Context Caching** (Platform) + Redis (Result Cache). |
 | **4. Latency** | `smaller models` | **Gemini 3.0 Flash** (Optimized for speed/volume). |
