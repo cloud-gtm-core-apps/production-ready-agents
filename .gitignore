@@ -6,4 +6,6 @@ vite.config.ts.*
 *.tar.gz
 .env
 .local
-python_agent/venv/
+python_agent_google-genai/venv/
+.venv
+.python_agent_adk/venv
