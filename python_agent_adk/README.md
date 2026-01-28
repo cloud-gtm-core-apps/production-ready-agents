@@ -33,12 +33,11 @@ pip install -r requirements.txt
 
 Set Google Cloud credentials:
 ```bash
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_GENAI_USE_VERTEXAI=TRUE
+export GOOGLE_CLOUD_PROJECT="genai-apps-25"
+export GOOGLE_GENAI_USE_VERTEXAI=TRUE # For Vertex AI
+export GOOGLE_CLOUD_LOCATION="global" 
 # Choose ONE of the following:
 export GOOGLE_API_KEY="your-api-key"              # For Gemini API
-# OR
-export GOOGLE_CLOUD_LOCATION="global"        # For Vertex AI
 ```
 
 ### 3. Run the Agent
