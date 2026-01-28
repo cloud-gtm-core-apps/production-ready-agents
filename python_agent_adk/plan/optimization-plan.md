@@ -44,13 +44,15 @@
 *   **File**: `app/config.py` (Create new).
 *   **Content**:
     *   Define `Settings` class using `pydantic-settings` or `os.environ`.
+    *   **Externalize Model**: Load `GEMINI_MODEL_NAME` from environment variable `GEMINI_MODEL_NAME` (defaulting to "gemini-3-flash-preview").
+    *   **Static Variable**: Assign this to a module-level static variable `MODEL_NAME` in `app/config.py` for easy import.
     *   Fields:
-        *   `GEMINI_MODEL_NAME` (Default: "gemini-3-flash-preview")
+        *   `MODEL_NAME` (Static variable derived from env var)
         *   `ORDER_DETECTION_PROMPT` (Default: Load from a constant or file)
         *   `RESPONSE_SUGGESTION_PROMPT` (Default: Load from a constant or file)
 *   **Action**:
     *   Refactor `app/agent.py` to import `MODEL_NAME` from `app/config.py`.
-    *   Refactor `app/strategies.py` to import prompts and model name from `app/config.py`.
+    *   Refactor `app/strategies.py` to import prompts and `MODEL_NAME` from `app/config.py`.
 
 #### 2. Define Strict Pydantic Schemas
 **Goal**: Create the contract for AI output.
