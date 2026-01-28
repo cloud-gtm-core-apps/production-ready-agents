@@ -3,7 +3,7 @@ from google import genai
 
 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
 location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-
+#This is just a script for testing the models list in vertexai
 print(f"Checking models for project: {project_id} in location: {location}")
 
 try:
