@@ -1,17 +1,21 @@
 import os
 import json
 from typing import List, Optional, Dict
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig
+from google import genai
+from google.genai import types
 from .models import OrderSummaryResult, ConditionalAIOutput, OrderDetails
 
-# Initialize Vertex AI
+# Initialize Vertex AI Client
 # Ensure GOOGLE_APPLICATION_CREDENTIALS is set or environment is authenticated
 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
-location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 
+client = None
 if project_id:
-    vertexai.init(project=project_id, location=location)
+    try:
+        client = genai.Client(vertexai=True, project=project_id, location=location)
+    except Exception as e:
+        print(f"Warning: Failed to initialize Google GenAI Client: {e}")
 
 def format_conversation(history: List[Dict[str, str]]) -> str:
     formatted = []
@@ -40,6 +44,10 @@ Drinks:
 """
 
 def analyze_order_summary(history: List[Dict[str, str]], customer_name: str = "Customer") -> OrderSummaryResult:
+    if not client:
+        print("Error: GenAI client not initialized.")
+        return OrderSummaryResult(orderMade=False)
+
     conversation_text = format_conversation(history)
     menu_context = build_menu_context()
     
@@ -69,8 +77,6 @@ def analyze_order_summary(history: List[Dict[str, str]], customer_name: str = "C
   If no order has been made, return: {{"orderMade": false}}"""
 
     try:
-        model = GenerativeModel("gemini-3-flash-preview") # Using Gemini 1.5 Flash (assuming 'gemini 3' was a typo or referring to next gen)
-        
         prompt = f"""
         System: {system_prompt}
         
@@ -81,9 +87,10 @@ def analyze_order_summary(history: List[Dict[str, str]], customer_name: str = "C
         Customer name: {customer_name}
         """
         
-        response = model.generate_content(
-            prompt,
-            generation_config=GenerationConfig(
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.3
             )
@@ -108,6 +115,9 @@ def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
     # Only suggest if the last message is from the user
     if not history or history[-1]["role"] != "user":
         return None
+    
+    if not client:
+        return None
         
     conversation_text = format_conversation(history)
     
@@ -121,8 +131,6 @@ def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
     """
     
     try:
-        model = GenerativeModel("gemini-1.5-flash-002")
-        
         prompt = f"""
         System: {system_prompt}
         
@@ -130,9 +138,10 @@ def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
         {conversation_text}
         """
         
-        response = model.generate_content(
-            prompt,
-            generation_config=GenerationConfig(
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 temperature=0.7
             )
         )

@@ -8,22 +8,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from python_agent.app.agent import OrderFlowAgent
 
-# Mock Vertex AI classes
-class MockGenerativeModel:
-    def __init__(self, model_name):
-        self.model_name = model_name
-        
-    def generate_content(self, *args, **kwargs):
-        pass
+
 
 async def run_verification():
     print("Starting verification (Simulated Vertex AI Conversation)...")
     
-    # Patch the Vertex AI GenerativeModel in strategies
-    with patch('python_agent.app.strategies.GenerativeModel') as MockModelClass:
-        # Mock instance
-        mock_model_instance = MagicMock()
-        MockModelClass.return_value = mock_model_instance
+    # Patch the GenAI Client in strategies
+    # Since 'client' is a global variable in strategies.py, we patch it directly
+    with patch('python_agent.app.strategies.client') as mock_client:
         
         # Setup mock responses
         # 1. No Order (Greeting)
@@ -42,13 +34,13 @@ async def run_verification():
         mock_response_suggestion_order = MagicMock()
         mock_response_suggestion_order.text = "Got it, one cheese pizza. Anything else?"
         
-        # Configure side effects for generate_content
+        # Configure side effects for client.models.generate_content
         # We need to simulate the sequence of calls:
         # 1. analyze_order_summary (Greeting)
         # 2. suggest_response (Greeting)
         # 3. analyze_order_summary (Order)
         # 4. suggest_response (Order)
-        mock_model_instance.generate_content.side_effect = [
+        mock_client.models.generate_content.side_effect = [
             mock_response_no_order,
             mock_response_suggestion,
             mock_response_order,

@@ -16,11 +16,21 @@ The new agent is located in `python_agent/`:
 
 ## 🚀 How to Run
 
-1.  **Install Dependencies**:
+1.  **Environment Setup**:
+    Create and activate a virtual environment to isolate dependencies:
     ```bash
-    pip install -r python_agent/requirements.txt
+    python3 -m venv venv
+    source venv/bin/activate
     ```
-    *(Note: You may need to authenticate with Google Cloud first, e.g., `gcloud auth application-default login`)*
+
+2.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *Note: If you encounter installation errors (e.g., missing `google-cloud-aiplatform` in internal feeds), force installation from PyPI:*
+    ```bash
+    pip install -r requirements.txt --index-url https://pypi.org/simple
+    ```
 
 2.  **Run the Agent**:
     ```bash

@@ -1,2 +1,2 @@
-google-cloud-aiplatform>=1.38.0
+google-genai>=1.59.0
 pydantic>=2.0.0
