@@ -16,7 +16,7 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from .strategies import ORDER_DETECTION_SYSTEM_PROMPT
 from .strategies import analyze_order_summary, suggest_response, RESPONSE_SUGGESTION_SYSTEM_PROMPT
-from .tools import get_current_date, search_tool
+from .tools import get_current_date, search_tool, record_order
 
 class AgentMode(Enum):
     """Represents the different modes the agent can run in."""
@@ -79,7 +79,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT,
-            tools=[load_memory, get_current_date, search_tool],
+            tools=[load_memory, get_current_date, search_tool, record_order],
         )
 
     def _init_vertexai_agent(self):
@@ -91,7 +91,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT,
-            tools=[load_memory, get_current_date, search_tool],
+            tools=[load_memory, get_current_date, search_tool, record_order],
         )
     
     def _init_gke_ai_agent(self):
@@ -107,7 +107,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT,
-            tools=[load_memory, get_current_date, search_tool],
+            tools=[load_memory, get_current_date, search_tool, record_order],
         )
         return root_agent
 
@@ -173,22 +173,39 @@ def get_agent_executor():
     """Returns the agent executor instance from the manager (lazy-loaded)."""
     return _service_manager.agent_executor
 
-capabilities = AgentCapabilities(streaming=True)
-skill = AgentSkill(
-    id="bug_triage_assistant",
-    name="Bug Triage Assistant",
-    description="Assists in triaging and debugging software issues by searching, creating, and updating bug tickets.",
-    tags=["bug-tracking", "triage"],
-    examples=["Create a new ticket for a login issue.", "Search for tickets related to 'database connection error'"],
-)
+# this is only used by adk web not in the django framework.
+adk_web_env = os.environ.get("ADK_WEB")
+if adk_web_env is None or adk_web_env.strip().lower() == "true":
+    capabilities = AgentCapabilities(streaming=True)
+    skill = AgentSkill(
+        id="bug_triage_assistant",
+        name="Bug Triage Assistant",
+        description="Assists in triaging and debugging software issues by searching, creating, and updating bug tickets.",
+        tags=["bug-tracking", "triage"],
+        examples=["Create a new ticket for a login issue.", "Search for tickets related to 'database connection error'"],
+    )
+    agent_card = AgentCard(
+        name="IT Bug Assistant Agent",
+        description="An agent to help users with bug tickets, including searching, creating, and updating them.",
+        url=f"{AGENT_URL}",
+        version="1.0.0",
+        defaultInputModes=SUPPORTED_CONTENT_TYPES,
+        defaultOutputModes=SUPPORTED_CONTENT_TYPES,
+        capabilities=capabilities,
+        skills=[skill],
+    )
+    # Note: to_a2a() auto-generates an agent card using AgentCardBuilder
+    # The agent card uses the agent's name and description properties
+    # Skills are auto-generated from the agent's tools
+    root_agent = get_agent()
+    # a2a_app = to_a2a(root_agent, port=AGENT_PORT)
+    request_handler = DefaultRequestHandler(
+        agent_executor=AdkAgentToA2AExecutor(root_agent),
+        task_store=InMemoryTaskStore(),
+    )
 
-agent_card = AgentCard(
-    name="IT Bug Assistant Agent",
-    description="An agent to help users with bug tickets, including searching, creating, and updating them.",
-    url=f"{AGENT_URL}",
-    version="1.0.0",
-    defaultInputModes=SUPPORTED_CONTENT_TYPES,
-    defaultOutputModes=SUPPORTED_CONTENT_TYPES,
-    capabilities=capabilities,
-    skills=[skill],
-)
+    # 2. The Functions Framework will automatically look for this 'app' variable.
+    app = A2AStarletteApplication(
+        agent_card=agent_card,
+        http_handler=request_handler,
+    ).build()

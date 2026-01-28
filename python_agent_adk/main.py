@@ -6,7 +6,7 @@ from google.genai.types import Content
 # Ensure we can import from local directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from python_agent_adk.app.agent import get_agent, get_session_service, get_memory_service
+from app.agent import get_agent, get_session_service, get_memory_service
 from google.adk.runners import Runner
 from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
 
