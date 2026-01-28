@@ -1,7 +1,5 @@
 # Python ADK Agent - Restaurant Order Assistant
 
-Successfully ported the `python_agent_google-genai` to `python_agent_adk` using the Google ADK library with updated architecture leveraging the agent executor pattern.
-
 ## 📂 Project Structure
 
 ```
@@ -12,7 +10,8 @@ python_agent_adk/
 │   ├── strategies.py         # System prompts and AI logic
 │   └── tools.py              # Tool definitions (date, search)
 ├── main.py                   # CLI entry point
-├── verify.py                 # Verification script
+├── integration_tests
+│   └── verify.py             # Verification script
 └── requirements.txt          # Dependencies
 ```
 
