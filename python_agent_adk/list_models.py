@@ -2,7 +2,7 @@ import os
 from google import genai
 
 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
-location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 
 print(f"Checking models for project: {project_id} in location: {location}")
 
