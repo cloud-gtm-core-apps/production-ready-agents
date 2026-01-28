@@ -125,7 +125,7 @@ The agent can help with orders from this menu:
 
 Run the verification script:
 ```bash
-python verify.py
+python integration_tests/verify.py
 ```
 
 This tests:
