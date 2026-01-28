@@ -35,12 +35,12 @@ The new agent is located in `python_agent/`:
 2.  **Run the Agent**:
     ```bash
     export GOOGLE_CLOUD_PROJECT=your-project-id
-    python3 python_agent/main.py
+    python3 main.py
     ```
 
 ## ✅ Verification Results
 
-I ran `python_agent/verify.py` which simulates a conversation:
+I ran `integration_tests/verify.py` which simulates a conversation:
 1.  **Greeting**: User says "Hi there" -> Agent suggests a greeting.
 2.  **Order**: User says "I'd like a cheese pizza" -> Agent detects the order and updates its internal state.
 
