@@ -9,7 +9,7 @@
 - [ ] **Memory Management**: Implement a "Sliding Window" strategy in `app/agent.py` to manage conversation history size before sending to API.
 - [ ] **Context Caching**: Implement Vertex AI Context Caching for the immutable Menu + System Prompt segments. #double check documentation (Verify minimum token count requirements - usually ~32k - to ensure this is applicable/cost-effective for this prompt size)
 - [ ] **Reliability**: Add `tenacity` retry logic with exponential backoff for model calls.
-- [ ] **Externalization**: Ensure `ORDER_DETECTION_SYSTEM_PROMPT` and `RESPONSE_SUGGESTION_SYSTEM_PROMPT` are loaded from `app/config.py` (or external files) to avoid hardcoding in `strategies.py`.
+- [ ] **Externalization**: Ensure `MODEL_NAME`, `ORDER_DETECTION_SYSTEM_PROMPT`, `RESPONSE_SUGGESTION_SYSTEM_PROMPT` are loaded from `app/config.py` (or external files) to avoid hardcoding in `strategies.py`.
 
 ## 🔍 Analysis & Investigation
 
@@ -23,7 +23,7 @@
 2.  **Hybrid Memory Management**:
     *   **Platform Level**: Use **Vertex AI Context Caching** for the static "System Prompt + Menu" block (huge token savings).
     *   **Application Level**: Use a **Sliding Window** (last N messages) for conversation history to maintain focus and reduce noise.
-3.  **Strict Determinism**: Use `temperature=0`, `top_p=1`, and native schema enforcement (`response_schema`) to treat the LLM as a data extraction engine, not a creative writer.
+3.  **Strict Determinism**: Use `temperature=0`, `top_p=1`, `frequency_penalty=0`, and native schema enforcement (`response_schema`) to treat the LLM as a data extraction engine, not a creative writer.
 4.  **Configuration as Code**: Hardcoded strings (prompts, model versions) are technical debt. They must be externalized to allow for easier experimentation and updates without code changes.
 
 ### Dependencies & Integration Points
@@ -88,12 +88,21 @@
     ```
 
 #### 3. Implement "Code-First" Logic & System Prompt Refactor
-**Goal**: Remove formatting noise from prompts.
+**Goal**: Remove formatting noise from prompts and enforce strict extraction.
 *   **File**: `app/strategies.py`.
 *   **Changes**:
+    *   **Hyperparameters**: Configure the model call with strict parameters:
+        *   `temperature: 0` (Absolute focus on most probable tokens).
+        *   `top_p: 1` (Standard when temp is 0).
+        *   `max_tokens: 500` (Sufficient for complex orders, prevents infinite loops).
+        *   `frequency_penalty: 0`, `presence_penalty: 0` (Strict extraction, no creative writing).
+        *   *Note*: Allow for per-model overrides in `app/config.py` if different models (e.g., Flash vs Pro) require tuning.
+    *   **Structure Enforcement**: Use `response_schema=OrderSummaryResult` as the primary "hyperparameter" for structure enforcement, reducing reliance on prompt instructions.
     *   **Strip Prompt**: Remove instructions like "Format as 2x Item", "Use $ sign", etc. from `ORDER_DETECTION_SYSTEM_PROMPT`.
     *   **Add Negative Constraints**: "DO NOT hallucinate items. If item is not in menu (e.g. 'half sandwich'), reject it."
-    *   **Update Call**: Use `response_schema=OrderSummaryResult` and `response_mime_type="application/json"` in the model config.
+    *   **Post-Processing Validation**:
+        *   Validate parsed Pydantic objects against business rules (already in `app/schemas.py` validators).
+        *   Add sanity checks (e.g., total price calculation verification if price is extracted).
     *   **Add Formatter**: Create a Python function `format_order_summary(result: OrderSummaryResult) -> str` that takes the clean object and produces the user-facing string.
 
 #### 4. Implement Memory Optimization (Sliding Window + Caching)
