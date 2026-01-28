@@ -1,75 +1,115 @@
-# Python Agent Optimization Plan (ADK Edition)
+# Feature Implementation Plan: Python ADK Agent Optimization (Refined)
 
-This document outlines strategies to improve the accuracy, determinism, and performance of the Python `ORDERFLOW` agent using Google ADK.
+## 📋 Todo Checklist
+- [ ] **Data Structure**: Create `app/schemas.py` with strict Pydantic models (`OrderSummaryResult`, `OrderItem`) including `confidence` and `reasoning` fields.
+- [ ] **Determinism**: Update `app/strategies.py` to use `response_schema` with the Pydantic models and strict hyperparameters (`temperature=0`). #double check documentation (Verify exact syntax for passing Pydantic classes in the specific SDK version used, e.g., LiteLLM vs google-genai)
+- [ ] **Logic Separation**: Refactor `ORDER_DETECTION_SYSTEM_PROMPT` to remove all *formatting* instructions (move formatting logic to Python code).
+- [ ] **Validation**: Implement Pydantic `@field_validator`s for business rules (e.g., menu item existence, "half sandwich" rejection).
+- [ ] **Memory Management**: Implement a "Sliding Window" strategy in `app/agent.py` to manage conversation history size before sending to API.
+- [ ] **Context Caching**: Implement Vertex AI Context Caching for the immutable Menu + System Prompt segments. #double check documentation (Verify minimum token count requirements - usually ~32k - to ensure this is applicable/cost-effective for this prompt size)
+- [ ] **Reliability**: Add `tenacity` retry logic with exponential backoff for model calls.
+- [ ] **Configuration**: Pin model versions (e.g., `gemini-1.5-flash-002`) in environment/config.
 
-## 🟢 LOW EFFORT (Quick Wins)
+## 🔍 Analysis & Investigation
 
-### 1. **Structured Outputs with ADK & Pydantic**
-**Problem:** `strategies.py` currently uses manual `json.loads()`, which is fragile.
-**Solution:** Pass the Pydantic model directly to the `response_schema` in `GenerateContentConfig`. ADK models like `Gemini` (and our `VertexGemini` subclass) pass this to the GenAI SDK for native parsing.
+### Codebase Structure
+- **`python_agent_adk/app/agent.py`**: Manages the agent loop and service instantiation.
+- **`python_agent_adk/app/strategies.py`**: Contains the prompt definitions (`ORDER_DETECTION_SYSTEM_PROMPT`) and calls the model.
+- **`python_agent_adk/app/tools.py`**: Helper functions.
 
-**Implementation:**
-```python
-# In strategies.py
-config = types.GenerateContentConfig(
-    response_mime_type="application/json",
-    response_schema=OrderSummaryResult,
-    temperature=0
-)
-# The SDK handles the parsing; access via response.parsed (if supported) 
-# or model.validate_json()
-```
+### Key Optimization Philosophies (Synthesized from Node.js & GenAI Plans)
+1.  **Application Code Extraction vs. AI Formatting**: The AI should *only* extract raw data (JSON). All string formatting (e.g., "$10.50", "2x Burger") must happen in deterministic Python code. This eliminates a huge class of hallucination bugs.
+2.  **Hybrid Memory Management**:
+    *   **Platform Level**: Use **Vertex AI Context Caching** for the static "System Prompt + Menu" block (huge token savings).
+    *   **Application Level**: Use a **Sliding Window** (last N messages) for conversation history to maintain focus and reduce noise.
+3.  **Strict Determinism**: Use `temperature=0`, `top_p=1`, and native schema enforcement (`response_schema`) to treat the LLM as a data extraction engine, not a creative writer.
 
-### 2. **Confidence Scoring & Reasoning (CoT)**
-**Problem:** It's hard to debug why the model made a specific prediction.
-**Solution:** Update the `OrderSummaryResult` model to include confidence and reasoning.
+### Dependencies & Integration Points
+- **Google GenAI SDK**: Requires the latest version to support `response_schema` with Pydantic objects.
+- **Pydantic**: Already in use, but needs to be leveraged for *runtime validation* of AI outputs, not just settings.
+- **Tenacity**: New dependency needed for robust retries.
 
-```python
-class OrderSummaryResult(BaseModel):
-    orderMade: bool
-    orderDetails: Optional[OrderDetails] = None
-    confidence: str # HIGH, MEDIUM, LOW
-    reasoning: str  # Thought process
-```
+## 📝 Implementation Plan
 
-### 3. **Business Logic Validators**
-**Problem:** The model might invent menu items.
-**Solution:** Use Pydantic's `@field_validator` to check items against `build_menu_context()`.
+### Prerequisites
+- Ensure `google-genai` SDK is updated to support `response_schema`.
+- Add `tenacity` to `requirements.txt`.
 
-### 4. **Pin Model Versions**
-**Problem:** `gemini-3-flash-preview` is an alias that might change.
-**Solution:** Pin to a specific stable version (e.g., `gemini-1.5-flash-002`) in `strategies.py`.
+### Step-by-Step Implementation
 
----
+#### 1. Define Strict Pydantic Schemas
+**Goal**: Create the contract for AI output.
+*   **File**: `app/schemas.py`.
+*   **Content**:
+    ```python
+    from pydantic import BaseModel, Field, field_validator
+    from enum import Enum
+    from typing import List, Optional
 
-## 🟡 MEDIUM EFFORT
+    class ConfidenceLevel(str, Enum):
+        HIGH = "HIGH"
+        MEDIUM = "MEDIUM"
+        LOW = "LOW"
 
-### 5. **Persistent Session Management**
-**Problem:** `InMemorySessionService` is used in `agent.py`, losing context on restart.
-**Solution:** Switch to `DatabaseSessionService` or `VertexAiSessionService` for production persistence.
+    class OrderItem(BaseModel):
+        name: str
+        quantity: int
+        special_instructions: Optional[str] = None
 
-```python
-# In agent.py
-def _init_session_service(self):
-    return DatabaseSessionService(db_url=DB_URL)
-```
+    class OrderSummaryResult(BaseModel):
+        reasoning: str = Field(..., description="Step-by-step logic for the extraction.")
+        confidence: ConfidenceLevel
+        order_made: bool
+        items: List[OrderItem]
+        
+        # Validator Example: Business Logic in Code
+        @field_validator('items')
+        def validate_menu_items(cls, v):
+            # Load MENU_ITEMS from config/constant
+            # if item.name not in MENU_ITEMS: raise ValueError(...)
+            return v
+    ```
 
-### 6. **Conversation Compression**
-**Problem:** Sending long histories increases latency and costs.
-**Solution:** Implement a summary strategy or filter unrelated messages before formatting context in `strategies.py`.
+#### 2. Implement "Code-First" Logic & System Prompt Refactor
+**Goal**: Remove formatting noise from prompts.
+*   **File**: `app/strategies.py`.
+*   **Changes**:
+    *   **Strip Prompt**: Remove instructions like "Format as 2x Item", "Use $ sign", etc. from `ORDER_DETECTION_SYSTEM_PROMPT`.
+    *   **Add Negative Constraints**: "DO NOT hallucinate items. If item is not in menu (e.g. 'half sandwich'), reject it."
+    *   **Update Call**: Use `response_schema=OrderSummaryResult` and `response_mime_type="application/json"` in the model config.
+    *   **Add Formatter**: Create a Python function `format_order_summary(result: OrderSummaryResult) -> str` that takes the clean object and produces the user-facing string.
 
-### 7. **Robust Retry Logic**
-**Problem:** Transient network or API errors.
-**Solution:** Wrap `generate_content_async` calls with `tenacity` retries.
+#### 3. Implement Memory Optimization (Sliding Window + Caching)
+**Goal**: Optimize token usage and latency.
+*   **File**: `app/agent.py` (or new `app/memory.py`).
+*   **Changes**:
+    *   **Sliding Window**: Before calling `generate_content`, slice `conversation_history` to the last ~10-15 relevant messages.
+    *   **Context Caching**:
+        *   Initialize a `cached_content` object using the Google GenAI SDK that contains the `ORDER_DETECTION_SYSTEM_PROMPT` (which includes the Menu).
+        *   Pass this `cached_content` resource to the `generate_content` call instead of sending the raw text every time.
+        *   *Note*: Ensure cache TTL is managed (e.g., 60 mins).
 
----
+#### 4. Reliability & Retries
+**Goal**: Handle transient failures gracefully.
+*   **File**: `app/strategies.py`.
+*   **Changes**:
+    *   Decorate the generation function with `@retry`.
+    *   Config: `stop=stop_after_attempt(3)`, `wait=wait_exponential(multiplier=1, min=2, max=10)`.
+    *   Handle `ValidationError` from Pydantic: If the model returns valid JSON but invalid data (e.g., negative quantity), catch the error and potentially retry with a "correction prompt" (advanced) or return a safe fallback.
 
-## 🔴 HIGH EFFORT
+#### 5. Model Pinning
+**Goal**: Production stability.
+*   **File**: `app/agent.py` / Environment variables.
+*   **Action**: Set default model to a pinned version (e.g., `gemini-1.5-flash-002`) instead of generic `gemini-pro`.
 
-### 8. **Dynamic Few-Shot Prompting**
-**Problem:** Complex orders need examples.
-**Solution:** Use a vector database (via `VertexAiRagMemoryService` in ADK) to retrieve similar past conversations and inject them as few-shot examples.
+### Testing Strategy
+1.  **Unit Tests**: Test `format_order_summary` with various `OrderSummaryResult` inputs to ensure deterministic string output.
+2.  **Schema Tests**: Verify `OrderSummaryResult` correctly rejects invalid JSON structures or logic violations (via validators).
+3.  **Integration Tests**: Use `verify.py` to run the "Half Sandwich" scenario.
+    *   *Expectation*: The model returns `order_made=False` with `reasoning` explaining the rejection.
 
-### 9. **ADK Evaluation Framework**
-**Problem:** Regression testing for agent logic is manual.
-**Solution:** Create a custom evaluation script using the ADK `Runner` to process a "golden dataset" and compare JSON outputs automatically.
+## 🎯 Success Criteria
+- **100% Deterministic Formatting**: The presentation of the order is controlled entirely by Python code, zero AI formatting errors.
+- **Valid JSON**: The API *always* returns a structure parsing to `OrderSummaryResult`.
+- **Reduced Latency/Cost**: Context Caching reduces input tokens for the menu by >90% per request.
+- **Explainability**: Every decision has a `reasoning` trace available in logs.
