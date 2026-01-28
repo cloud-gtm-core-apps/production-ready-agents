@@ -8,7 +8,7 @@
 - [ ] **Memory Management**: Implement a "Sliding Window" strategy in `app/agent.py` to manage conversation history size before sending to API.
 - [ ] **Context Caching**: Implement Vertex AI Context Caching for the immutable Menu + System Prompt segments. #double check documentation (Verify minimum token count requirements - usually ~32k - to ensure this is applicable/cost-effective for this prompt size)
 - [ ] **Reliability**: Add `tenacity` retry logic with exponential backoff for model calls.
-- [ ] **Configuration**: Pin model versions (e.g., `gemini-1.5-flash-002`) in environment/config.
+- [ ] **Configuration**: Pin model versions (e.g., `gemini-3.0-flash-preview`) in environment/config.
 
 ## 🔍 Analysis & Investigation
 
