@@ -1,14 +1,15 @@
 # Feature Implementation Plan: Python ADK Agent Optimization (Refined)
 
 ## 📋 Todo Checklist
+- [ ] **Configuration**: Create `app/config.py` to centralize settings (Model Version, Prompts) and load from environment variables.
 - [ ] **Data Structure**: Create `app/schemas.py` with strict Pydantic models (`OrderSummaryResult`, `OrderItem`) including `confidence` and `reasoning` fields.
 - [ ] **Determinism**: Update `app/strategies.py` to use `response_schema` with the Pydantic models and strict hyperparameters (`temperature=0`). #double check documentation (Verify exact syntax for passing Pydantic classes in the specific SDK version used, e.g., LiteLLM vs google-genai)
-- [ ] **Logic Separation**: Refactor `ORDER_DETECTION_SYSTEM_PROMPT` to remove all *formatting* instructions (move formatting logic to Python code).
+- [ ] **Logic Separation**: Refactor `ORDER_DETECTION_SYSTEM_PROMPT` (loaded from config) to remove all *formatting* instructions (move formatting logic to Python code).
 - [ ] **Validation**: Implement Pydantic `@field_validator`s for business rules (e.g., menu item existence, "half sandwich" rejection).
 - [ ] **Memory Management**: Implement a "Sliding Window" strategy in `app/agent.py` to manage conversation history size before sending to API.
 - [ ] **Context Caching**: Implement Vertex AI Context Caching for the immutable Menu + System Prompt segments. #double check documentation (Verify minimum token count requirements - usually ~32k - to ensure this is applicable/cost-effective for this prompt size)
 - [ ] **Reliability**: Add `tenacity` retry logic with exponential backoff for model calls.
-- [ ] **Configuration**: Pin model versions (e.g., `gemini-3.0-flash-preview`) in environment/config.
+- [ ] **Externalization**: Ensure `ORDER_DETECTION_SYSTEM_PROMPT` and `RESPONSE_SUGGESTION_SYSTEM_PROMPT` are loaded from `app/config.py` (or external files) to avoid hardcoding in `strategies.py`.
 
 ## 🔍 Analysis & Investigation
 
@@ -23,6 +24,7 @@
     *   **Platform Level**: Use **Vertex AI Context Caching** for the static "System Prompt + Menu" block (huge token savings).
     *   **Application Level**: Use a **Sliding Window** (last N messages) for conversation history to maintain focus and reduce noise.
 3.  **Strict Determinism**: Use `temperature=0`, `top_p=1`, and native schema enforcement (`response_schema`) to treat the LLM as a data extraction engine, not a creative writer.
+4.  **Configuration as Code**: Hardcoded strings (prompts, model versions) are technical debt. They must be externalized to allow for easier experimentation and updates without code changes.
 
 ### Dependencies & Integration Points
 - **Google GenAI SDK**: Requires the latest version to support `response_schema` with Pydantic objects.
@@ -37,7 +39,20 @@
 
 ### Step-by-Step Implementation
 
-#### 1. Define Strict Pydantic Schemas
+#### 1. Centralize Configuration
+**Goal**: Remove hardcoded values from logic files.
+*   **File**: `app/config.py` (Create new).
+*   **Content**:
+    *   Define `Settings` class using `pydantic-settings` or `os.environ`.
+    *   Fields:
+        *   `GEMINI_MODEL_NAME` (Default: "gemini-3-flash-preview")
+        *   `ORDER_DETECTION_PROMPT` (Default: Load from a constant or file)
+        *   `RESPONSE_SUGGESTION_PROMPT` (Default: Load from a constant or file)
+*   **Action**:
+    *   Refactor `app/agent.py` to import `MODEL_NAME` from `app/config.py`.
+    *   Refactor `app/strategies.py` to import prompts and model name from `app/config.py`.
+
+#### 2. Define Strict Pydantic Schemas
 **Goal**: Create the contract for AI output.
 *   **File**: `app/schemas.py`.
 *   **Content**:
@@ -70,7 +85,7 @@
             return v
     ```
 
-#### 2. Implement "Code-First" Logic & System Prompt Refactor
+#### 3. Implement "Code-First" Logic & System Prompt Refactor
 **Goal**: Remove formatting noise from prompts.
 *   **File**: `app/strategies.py`.
 *   **Changes**:
@@ -79,7 +94,7 @@
     *   **Update Call**: Use `response_schema=OrderSummaryResult` and `response_mime_type="application/json"` in the model config.
     *   **Add Formatter**: Create a Python function `format_order_summary(result: OrderSummaryResult) -> str` that takes the clean object and produces the user-facing string.
 
-#### 3. Implement Memory Optimization (Sliding Window + Caching)
+#### 4. Implement Memory Optimization (Sliding Window + Caching)
 **Goal**: Optimize token usage and latency.
 *   **File**: `app/agent.py` (or new `app/memory.py`).
 *   **Changes**:
@@ -89,7 +104,7 @@
         *   Pass this `cached_content` resource to the `generate_content` call instead of sending the raw text every time.
         *   *Note*: Ensure cache TTL is managed (e.g., 60 mins).
 
-#### 4. Reliability & Retries
+#### 5. Reliability & Retries
 **Goal**: Handle transient failures gracefully.
 *   **File**: `app/strategies.py`.
 *   **Changes**:
@@ -97,15 +112,11 @@
     *   Config: `stop=stop_after_attempt(3)`, `wait=wait_exponential(multiplier=1, min=2, max=10)`.
     *   Handle `ValidationError` from Pydantic: If the model returns valid JSON but invalid data (e.g., negative quantity), catch the error and potentially retry with a "correction prompt" (advanced) or return a safe fallback.
 
-#### 5. Model Pinning
-**Goal**: Production stability.
-*   **File**: `app/agent.py` / Environment variables.
-*   **Action**: Set default model to a pinned version (e.g., `gemini-1.5-flash-002`) instead of generic `gemini-pro`.
-
 ### Testing Strategy
-1.  **Unit Tests**: Test `format_order_summary` with various `OrderSummaryResult` inputs to ensure deterministic string output.
-2.  **Schema Tests**: Verify `OrderSummaryResult` correctly rejects invalid JSON structures or logic violations (via validators).
-3.  **Integration Tests**: Use `verify.py` to run the "Half Sandwich" scenario.
+1.  **Configuration Tests**: Verify that changing `GEMINI_MODEL_NAME` env var changes the model used in `app/agent.py`.
+2.  **Unit Tests**: Test `format_order_summary` with various `OrderSummaryResult` inputs to ensure deterministic string output.
+3.  **Schema Tests**: Verify `OrderSummaryResult` correctly rejects invalid JSON structures or logic violations (via validators).
+4.  **Integration Tests**: Use `verify.py` to run the "Half Sandwich" scenario.
     *   *Expectation*: The model returns `order_made=False` with `reasoning` explaining the rejection.
 
 ## 🎯 Success Criteria
@@ -113,3 +124,4 @@
 - **Valid JSON**: The API *always* returns a structure parsing to `OrderSummaryResult`.
 - **Reduced Latency/Cost**: Context Caching reduces input tokens for the menu by >90% per request.
 - **Explainability**: Every decision has a `reasoning` trace available in logs.
+- **Configurability**: Model version and prompts can be changed without deploying new code.
