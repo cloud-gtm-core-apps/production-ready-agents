@@ -50,34 +50,37 @@ Drinks:
   - Water: $1.50
 """
 
+
+ORDER_DETECTION_SYSTEM_PROMPT = """You are a helpful restaurant order assistant. Help customers with their orders in a friendly, natural way.
+
+MENU ITEMS:
+Pizzas:
+  - Cheese Pizza: $12.00
+  - Pepperoni Pizza: $14.00
+  - Veggie Pizza: $13.00
+
+Sandwiches:
+  - Turkey Sandwich: $10.00
+  - Ham Sandwich: $10.00
+  - Lunch Special (1/2 Sandwich + Soup): $12.00
+
+Drinks:
+  - Soda: $2.50
+  - Water: $1.50
+
+IMPORTANT RULES:
+- ONLY include items that are in the menu provided above.
+- Be friendly and helpful in your responses.
+- Keep responses brief (under 40 words).
+- Sound natural and casual.
+"""
+
+
 async def analyze_order_summary(history: List[Dict[str, str]], customer_name: str = "Customer") -> OrderSummaryResult:
     conversation_text = format_conversation(history)
     menu_context = build_menu_context()
     
-    system_prompt = f"""You are an order detection system for a restaurant. Analyze the conversation and determine if the customer has placed an order.
-  
-  IMPORTANT: {menu_context}
-  
-  CRITICAL RULES:
-  - ONLY include items that are in the menu provided above.
-  - NEVER include 1/2 sandwich requests. If a customer mentions a 1/2 sandwich, ignore it.
-  
-  If an order has been placed, extract:
-  1. Customer name
-  2. All items ordered (be specific, include quantities and prices)
-  3. Any special notes
-  
-  Return only valid JSON:
-  {{
-    "orderMade": boolean,
-    "orderDetails": {{
-        "customerName": string,
-        "items": string[],
-        "notes": string
-    }}
-  }}
-  
-  If no order has been made, return: {{"orderMade": false}}"""
+    system_prompt = ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=menu_context)
 
     prompt = f"""
     System: {system_prompt}
@@ -130,14 +133,8 @@ async def analyze_order_summary(history: List[Dict[str, str]], customer_name: st
         print(f"Error in analyze_order_summary: {e}")
         return OrderSummaryResult(orderMade=False)
 
-async def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
-    # Only suggest if the last message is from the user
-    if not history or history[-1].get("role") != "user":
-        return None
-        
-    conversation_text = format_conversation(history)
-    
-    system_prompt = """You are helping a restaurant manager write responses to customers. Generate a short, natural, human-sounding response.
+
+RESPONSE_SUGGESTION_SYSTEM_PROMPT = """You are helping a restaurant manager write responses to customers. Generate a short, natural, human-sounding response.
     
     Guidelines:
     - Keep it brief (under 40 words)
@@ -145,6 +142,15 @@ async def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
     - Be helpful but not overly enthusiastic
     - Just provide the response text itself
     """
+
+async def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
+    # Only suggest if the last message is from the user
+    if not history or history[-1].get("role") != "user":
+        return None
+        
+    conversation_text = format_conversation(history)
+    
+    system_prompt = RESPONSE_SUGGESTION_SYSTEM_PROMPT
     
     prompt = f"""
     System: {system_prompt}

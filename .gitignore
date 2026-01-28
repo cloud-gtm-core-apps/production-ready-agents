@@ -9,3 +9,4 @@ vite.config.ts.*
 python_agent_google-genai/venv/
 .venv
 .python_agent_adk/venv
+python_agent_adk/venv
