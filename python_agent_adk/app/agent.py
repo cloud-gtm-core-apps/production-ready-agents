@@ -17,7 +17,7 @@ from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
 
 from .strategies import analyze_order_summary, ORDER_DETECTION_SYSTEM_PROMPT
-from .tools import get_current_date, search_tool, record_order, build_menu_context
+from .tools import get_current_date, search_tool, record_order, build_menu_context, calculate_order_total
 
 class AgentMode(Enum):
     """Represents the different modes the agent can run in."""
@@ -82,7 +82,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order],
+            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
         )
 
 
@@ -95,7 +95,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order],
+            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
         )
 
     
@@ -112,7 +112,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order],
+            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
         )
 
         return root_agent
@@ -192,7 +192,7 @@ def get_agent_executor():
     return _service_manager.agent_executor
 
 # this is used by adk web ui or a2a framework for agent to agent communication.
-adk_web_env = os.environ.get("A2A")
+adk_web_env = os.environ.get("ADK_WEB_A2A")
 if adk_web_env is None or adk_web_env.strip().lower() == "true":
     capabilities = AgentCapabilities(streaming=True)
     skill = AgentSkill(
@@ -200,7 +200,7 @@ if adk_web_env is None or adk_web_env.strip().lower() == "true":
         name="Restaurant Order Assistant",
         description="Helps customers place restaurant orders and manages order details like items, quantities, and pickup times.",
         tags=["restaurant", "ordering", "order-management"],
-        examples=["I'd like to order a Pepperoni Pizza for pickup at 7pm", "What's on the menu?"],
+        examples=["I'd like to order a Pepperoni Pizza for pickup at 7pm", "What's on the menu?", "How much for 2 Cheese Pizzas and a Soda?"],
     )
     agent_card = AgentCard(
         name="OrderFlow Restaurant Assistant",
