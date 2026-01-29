@@ -34,9 +34,6 @@ def format_conversation(history: List[Dict[str, str]]) -> str:
         formatted.append(f"{sender}: {msg.get('content', '')}")
     return "\n".join(formatted)
 
-
-
-
 ORDER_DETECTION_SYSTEM_PROMPT = """You are a helpful restaurant order assistant. Help customers with their orders in a friendly, natural way.
 
 {menu_context}
@@ -110,32 +107,3 @@ async def analyze_order_summary(history: List[Dict[str, str]], customer_name: st
     except Exception as e:
         print(f"Error in analyze_order_summary: {e}")
         return OrderSummaryResult(orderMade=False)
-
-RESPONSE_SUGGESTION_SYSTEM_PROMPT = """You are a helpful restaurant assistant. Suggest a response to the customer based on the conversation history.
-Keep it brief and helpful.
-"""
-
-async def suggest_response(history: List[Dict[str, str]]) -> str:
-    conversation_text = format_conversation(history)
-    prompt = f"""
-    System: {RESPONSE_SUGGESTION_SYSTEM_PROMPT}
-    
-    User: Suggest a response for this conversation:
-    
-    {conversation_text}
-    """
-
-    model = get_model()
-    try:
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
-        request = LlmRequest(model=MODEL_NAME, contents=contents)
-        response_text = ""
-        async for chunk in model.generate_content_async(request):
-            if chunk.content and chunk.content.parts:
-                for part in chunk.content.parts:
-                    if part.text:
-                        response_text += part.text
-        return response_text
-    except Exception as e:
-        print(f"Error in suggest_response: {e}")
-        return "I'm sorry, I'm having trouble responding right now."
