@@ -44,6 +44,10 @@ export GOOGLE_API_KEY="your-api-key"              # For Gemini API
 ```bash
 python main.py
 ```
+or run with adk web
+```bash
+uv run adk web
+```
 
 **Expected Output:**
 ```

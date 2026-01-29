@@ -29,7 +29,31 @@ def record_order(items: list[str], customer_name: str, notes: str = "") -> str:
     return f"Order recorded for {customer_name}. Items: {', '.join(items)}"
 
 
+
+def build_menu_context() -> str:
+    """
+    Returns the current restaurant menu as a string.
+    """
+    return """
+MENU ITEMS:
+Pizzas:
+  - Cheese Pizza: $12.00
+  - Pepperoni Pizza: $14.00
+  - Veggie Pizza: $13.00
+
+Sandwiches:
+  - Turkey Sandwich: $10.00
+  - Ham Sandwich: $10.00
+  - Lunch Special (1/2 Sandwich + Soup): $12.00
+
+Drinks:
+  - Soda: $2.50
+  - Water: $1.50
+"""
+
+
 # ----- Example of a Built-in Tool -----
+
 search_agent = Agent(
     model="gemini-2.5-flash",
     name="search_agent",

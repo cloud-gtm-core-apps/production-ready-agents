@@ -16,7 +16,7 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from .strategies import ORDER_DETECTION_SYSTEM_PROMPT
 from .strategies import analyze_order_summary, suggest_response, RESPONSE_SUGGESTION_SYSTEM_PROMPT
-from .tools import get_current_date, search_tool, record_order
+from .tools import get_current_date, search_tool, record_order, build_menu_context
 
 class AgentMode(Enum):
     """Represents the different modes the agent can run in."""
@@ -63,12 +63,8 @@ class ServiceManager:
     def _init_memory_service(self):
         """Initializes the memory service."""
         print("Initializing InMemoryMemoryService...")
-        # For RAG-based memory, you would use VertexAiRagMemoryService
-        # return VertexAiRagMemoryService(
-        #     rag_corpus=RAG_CORPUS_RESOURCE_NAME,
-        #     similarity_top_k=SIMILARITY_TOP_K,
-        #     vector_distance_threshold=VECTOR_DISTANCE_THRESHOLD
-        # )
+        # For RAG-based persistent memory, you would use https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview
+        # return memory-bank
         return InMemoryMemoryService()
 
     def _init_agent(self):
@@ -78,9 +74,10 @@ class ServiceManager:
             model="gemini-3-flash-preview",
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT,
+            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
             tools=[load_memory, get_current_date, search_tool, record_order],
         )
+
 
     def _init_vertexai_agent(self):
         """Initializes the Vertex AI agent."""
@@ -90,9 +87,10 @@ class ServiceManager:
             model=LiteLlm(model=f"vertex_ai/openai/{endpoint_id}"),
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT,
+            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
             tools=[load_memory, get_current_date, search_tool, record_order],
         )
+
     
     def _init_gke_ai_agent(self):
         """Initializes the GKE AI agent."""
@@ -106,9 +104,10 @@ class ServiceManager:
             ),
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT,
+            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
             tools=[load_memory, get_current_date, search_tool, record_order],
         )
+
         return root_agent
 
     def _init_agent_executor(self):
@@ -178,15 +177,15 @@ adk_web_env = os.environ.get("ADK_WEB")
 if adk_web_env is None or adk_web_env.strip().lower() == "true":
     capabilities = AgentCapabilities(streaming=True)
     skill = AgentSkill(
-        id="bug_triage_assistant",
-        name="Bug Triage Assistant",
-        description="Assists in triaging and debugging software issues by searching, creating, and updating bug tickets.",
-        tags=["bug-tracking", "triage"],
-        examples=["Create a new ticket for a login issue.", "Search for tickets related to 'database connection error'"],
+        id="restaurant_order_assistant",
+        name="Restaurant Order Assistant",
+        description="Helps customers place restaurant orders and manages order details like items, quantities, and pickup times.",
+        tags=["restaurant", "ordering", "order-management"],
+        examples=["I'd like to order a Pepperoni Pizza for pickup at 7pm", "What's on the menu?"],
     )
     agent_card = AgentCard(
-        name="IT Bug Assistant Agent",
-        description="An agent to help users with bug tickets, including searching, creating, and updating them.",
+        name="OrderFlow Restaurant Assistant",
+        description="An AI-powered assistant that manages restaurant orders, automatically detects order details from SMS, and assists managers with order tracking.",
         url=f"{AGENT_URL}",
         version="1.0.0",
         defaultInputModes=SUPPORTED_CONTENT_TYPES,

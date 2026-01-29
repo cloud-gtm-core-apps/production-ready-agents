@@ -5,6 +5,8 @@ from google.genai import types
 from google.adk.models import LlmRequest
 from pydantic import BaseModel
 from .adk_extensions import VertexGemini
+from .tools import build_menu_context
+
 
 # Data Models
 class OrderDetails(BaseModel):
@@ -32,50 +34,24 @@ def format_conversation(history: List[Dict[str, str]]) -> str:
         formatted.append(f"{sender}: {msg.get('content', '')}")
     return "\n".join(formatted)
 
-def build_menu_context() -> str:
-    return """
-MENU ITEMS:
-Pizzas:
-  - Cheese Pizza: $12.00
-  - Pepperoni Pizza: $14.00
-  - Veggie Pizza: $13.00
 
-Sandwiches:
-  - Turkey Sandwich: $10.00
-  - Ham Sandwich: $10.00
-  - Lunch Special (1/2 Sandwich + Soup): $12.00
-
-Drinks:
-  - Soda: $2.50
-  - Water: $1.50
-"""
 
 
 ORDER_DETECTION_SYSTEM_PROMPT = """You are a helpful restaurant order assistant. Help customers with their orders in a friendly, natural way.
 
-MENU ITEMS:
-Pizzas:
-  - Cheese Pizza: $12.00
-  - Pepperoni Pizza: $14.00
-  - Veggie Pizza: $13.00
-
-Sandwiches:
-  - Turkey Sandwich: $10.00
-  - Ham Sandwich: $10.00
-  - Lunch Special (1/2 Sandwich + Soup): $12.00
-
-Drinks:
-  - Soda: $2.50
-  - Water: $1.50
+{menu_context}
 
 IMPORTANT RULES:
 - ONLY include items that are in the menu provided above.
 - Use the 'record_order' tool when the customer specifies items they want to order. 
 - When calling 'record_order', provide the list of items, customer name (if known, otherwise 'Customer'), and any notes.
-- Be friendly and helpful in your responses.
+- Use ```{menu_context}``` if you need to see the full list of available items or if the customer asks for the menu.
+- Use the 'load_memory' tool to access any previous orders or notes.
+- Always show price for each menu item.
 - Keep responses brief (under 40 words).
-- Sound natural and casual.
+- Be helpful but not overly enthusiastic
 """
+
 
 
 async def analyze_order_summary(history: List[Dict[str, str]], customer_name: str = "Customer") -> OrderSummaryResult:
@@ -135,52 +111,31 @@ async def analyze_order_summary(history: List[Dict[str, str]], customer_name: st
         print(f"Error in analyze_order_summary: {e}")
         return OrderSummaryResult(orderMade=False)
 
+RESPONSE_SUGGESTION_SYSTEM_PROMPT = """You are a helpful restaurant assistant. Suggest a response to the customer based on the conversation history.
+Keep it brief and helpful.
+"""
 
-RESPONSE_SUGGESTION_SYSTEM_PROMPT = """You are helping a restaurant manager write responses to customers. Generate a short, natural, human-sounding response.
-    
-    Guidelines:
-    - Keep it brief (under 40 words)
-    - Sound natural and casual
-    - Be helpful but not overly enthusiastic
-    - Just provide the response text itself
-    """
-
-async def suggest_response(history: List[Dict[str, str]]) -> Optional[str]:
-    # Only suggest if the last message is from the user
-    if not history or history[-1].get("role") != "user":
-        return None
-        
+async def suggest_response(history: List[Dict[str, str]]) -> str:
     conversation_text = format_conversation(history)
-    
-    system_prompt = RESPONSE_SUGGESTION_SYSTEM_PROMPT
-    
     prompt = f"""
-    System: {system_prompt}
+    System: {RESPONSE_SUGGESTION_SYSTEM_PROMPT}
     
-    User: Conversation:
+    User: Suggest a response for this conversation:
+    
     {conversation_text}
     """
-    
+
     model = get_model()
-    
     try:
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
-        request = LlmRequest(
-            model=MODEL_NAME,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                temperature=0.7
-            )
-        )
-        
+        request = LlmRequest(model=MODEL_NAME, contents=contents)
         response_text = ""
         async for chunk in model.generate_content_async(request):
-             if chunk.content and chunk.content.parts:
-                 for part in chunk.content.parts:
-                     if part.text:
-                         response_text += part.text
-
-        return response_text.strip()
+            if chunk.content and chunk.content.parts:
+                for part in chunk.content.parts:
+                    if part.text:
+                        response_text += part.text
+        return response_text
     except Exception as e:
         print(f"Error in suggest_response: {e}")
-        return None
+        return "I'm sorry, I'm having trouble responding right now."
