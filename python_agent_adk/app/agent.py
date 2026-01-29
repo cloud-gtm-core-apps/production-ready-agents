@@ -14,8 +14,7 @@ from .agent_executor import AdkAgentToA2AExecutor
 from google.adk.tools import load_memory
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
-from .strategies import ORDER_DETECTION_SYSTEM_PROMPT
-from .strategies import analyze_order_summary, suggest_response, RESPONSE_SUGGESTION_SYSTEM_PROMPT
+from .strategies import analyze_order_summary, ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import get_current_date, search_tool, record_order, build_menu_context
 
 class AgentMode(Enum):
