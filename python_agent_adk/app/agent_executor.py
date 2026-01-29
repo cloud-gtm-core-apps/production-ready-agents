@@ -34,7 +34,7 @@ class AdkAgentToA2AExecutor(AgentExecutor):
         memory_service=InMemoryMemoryService(),
         runner: Runner = None
     ):
-        self.name = "IT Bug Assistant Agent"
+        self.name = "restaurant_order_agent"
         if runner is not None:
             self._runner = runner
         else:
