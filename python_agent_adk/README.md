@@ -48,6 +48,10 @@ or run with adk web
 ```bash
 uv run adk web
 ```
+or run with uvicorn for a2a
+```bash
+uvicorn app.agent:app --host localhost --port 8001
+```
 
 **Expected Output:**
 ```
