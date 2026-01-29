@@ -32,6 +32,7 @@ class AdkAgentToA2AExecutor(AgentExecutor):
         agent: BaseAgent = None,
         session_service=InMemorySessionService(),
         memory_service=InMemoryMemoryService(),
+        artifact_service=InMemoryArtifactService(),
         runner: Runner = None
     ):
         self.name = "restaurant_order_agent"
@@ -42,7 +43,7 @@ class AdkAgentToA2AExecutor(AgentExecutor):
                 app_name=self.name,
                 agent=agent,
                 session_service=session_service,
-                artifact_service=InMemoryArtifactService(),
+                artifact_service=artifact_service,
                 memory_service=memory_service,
             )
         self.agent = agent

@@ -14,6 +14,8 @@ from .agent_executor import AdkAgentToA2AExecutor
 from google.adk.tools import load_memory
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
+from google.adk.artifacts import InMemoryArtifactService
+
 from .strategies import analyze_order_summary, ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import get_current_date, search_tool, record_order, build_menu_context
 
@@ -50,6 +52,7 @@ class ServiceManager:
         print("Initializing ServiceManager...")
         self._session_service = None
         self._memory_service = None
+        self._artifact_service = None
         self._root_agent = None
         self._agent_executor = None
         print("ServiceManager initialized (services will be lazy-loaded).")
@@ -65,6 +68,11 @@ class ServiceManager:
         # For RAG-based persistent memory, you would use https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview
         # return memory-bank
         return InMemoryMemoryService()
+
+    def _init_artifact_service(self):
+        """Initializes the artifact service."""
+        print("Initializing InMemoryArtifactService...")
+        return InMemoryArtifactService()
 
     def _init_agent(self):
         """Initializes the root agent."""
@@ -112,7 +120,12 @@ class ServiceManager:
     def _init_agent_executor(self):
         """Initializes the agent executor."""
         print("Initializing AdkAgentToA2AExecutor...")
-        return AdkAgentToA2AExecutor(self.root_agent, self.session_service, self.memory_service)
+        return AdkAgentToA2AExecutor(
+            self.root_agent, 
+            self.session_service, 
+            self.memory_service,
+            self.artifact_service
+        )
 
     @property
     def session_service(self):
@@ -127,6 +140,13 @@ class ServiceManager:
         if self._memory_service is None:
             self._memory_service = self._init_memory_service()
         return self._memory_service
+
+    @property
+    def artifact_service(self):
+        """Lazy-loads and returns the artifact service."""
+        if self._artifact_service is None:
+            self._artifact_service = self._init_artifact_service()
+        return self._artifact_service
 
     @property
     def root_agent(self):
@@ -198,7 +218,7 @@ if adk_web_env is None or adk_web_env.strip().lower() == "true":
     root_agent = get_agent()
     # a2a_app = to_a2a(root_agent, port=AGENT_PORT)
     request_handler = DefaultRequestHandler(
-        agent_executor=AdkAgentToA2AExecutor(root_agent),
+        agent_executor=get_agent_executor(),
         task_store=InMemoryTaskStore(),
     )
 
