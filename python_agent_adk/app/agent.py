@@ -191,7 +191,7 @@ def get_agent_executor():
     """Returns the agent executor instance from the manager (lazy-loaded)."""
     return _service_manager.agent_executor
 
-# this is used by adk web or a2a framework for agent to agent communication.
+# this is used by adk web ui or a2a framework for agent to agent communication.
 adk_web_env = os.environ.get("ADK")
 if adk_web_env is None or adk_web_env.strip().lower() == "true" or adk_web_env.strip().lower() == "a2a":
     capabilities = AgentCapabilities(streaming=True)
