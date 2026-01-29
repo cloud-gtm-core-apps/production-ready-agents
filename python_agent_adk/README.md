@@ -50,6 +50,7 @@ uv run adk web
 ```
 or run with uvicorn for a2a
 ```bash
+#try the ui: http://127.0.0.1:8001/.well-known/agent-card.json
 uvicorn app.agent:app --host localhost --port 8001
 ```
 
