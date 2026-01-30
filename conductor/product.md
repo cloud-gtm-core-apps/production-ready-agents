@@ -1,19 +1,20 @@
 # Initial Concept
-This project, ORDERFLOW, is an AI-powered restaurant order management system designed to process customer SMS messages, automatically detect orders, and provide a real-time dashboard for managers. The current focus is on **Agent Optimizations**, specifically targeting AI accuracy, latency, and costs through better determinism, model selection, and memory management.
+This project, ORDERFLOW, is an AI-powered restaurant order assistant agent built using the Google Agent Development Kit (ADK). It is designed to interpret natural language user inputs to detect orders, manage menus, and suggest responses.
 
 # Product Vision
-To provide a robust, efficient, and highly accurate AI layer for restaurant ordering that reduces manual overhead for managers while ensuring a seamless, reliable experience for end customers.
+To provide a robust, efficient, and highly accurate AI layer for restaurant ordering that reduces manual overhead for managers while ensuring a seamless, reliable experience for end customers via automated order detection.
 
 # Target Users
-- **Restaurant Managers**: Rely on the dashboard for accurate, fast order updates and AI-assisted communication.
-- **End Customers**: SMS users who require reliable, low-latency order detection and confirmation.
+- **Restaurant Managers**: Use the agent to automate order tracking and manage customer communications more effectively.
+- **End Customers**: Users who interact with the agent (e.g., via SMS) for reliable, automated order placement and confirmation.
 
 # Key Goals
 - **Accuracy & Reliability**: Improve order extraction (items, quantities, pickup times) and significantly reduce errors.
-- **Performance & Determinism**: Reduce latency and ensure consistent AI behavior across different runs through tuned hyperparameters (Temperature, Top-P).
-- **Cost & Efficiency**: Transition to more cost-effective models (Trucube/Llama) and optimize token usage without sacrificing quality.
+- **Agent Orchestration**: Effectively use the Google ADK and A2A standard for robust agent-to-agent and agent-to-user communication.
+- **Determinism & Performance**: Ensure consistent AI behavior and low-latency responses for a professional customer experience.
 
-# Primary Features (Optimization Focus)
-- **Determinism & Consistency**: Ensuring predictable, high-quality JSON outputs for structured data extraction.
-- **Hallucination Reduction**: Eliminating the addition of non-existent items or times in AI summaries.
-- **Hyperparameter Tuning**: Implementing task-specific settings for temperature and top-p to maximize model reliability.
+# Primary Features
+- **Natural Language Order Detection**: Extracting structured order data (items, quantities, times) from unstructured text.
+- **Menu Management**: Integrating menu context into the agent's instructions for accurate item detection and pricing.
+- **A2A Interoperability**: Supporting the Agent-to-Agent (A2A) protocol for seamless integration into broader service ecosystems.
+- **Automated Verification**: Using scripts to ensure the agent's logic remains correct as the system evolves.

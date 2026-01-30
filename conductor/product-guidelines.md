@@ -1,19 +1,20 @@
 # Product Guidelines
 
-These guidelines define the standards for AI behavior, system tone, and data integrity for the ORDERFLOW Agent Optimizations.
+These guidelines define the standards for AI behavior, system tone, and data integrity for the ORDERFLOW Agent.
 
 ## Tone and Style
-- **Professional & Explicit**: All AI-generated summaries and technical communications must be clear, structured, and formal to eliminate ambiguity.
-- **Technical & Detailed**: Documentation and UI metadata should provide high-level technical details (e.g., model version, specific reasoning) to aid in debugging and verification.
+- **Professional & Explicit**: All AI-generated responses and summaries must be clear, structured, and formal to eliminate ambiguity.
+- **Helpful & Efficient**: The agent should prioritize speed and accuracy in detecting orders, providing concise confirmations to users.
 
 ## Determinism and Predictability
-- **Predictability First**: We prioritize strict, consistent JSON outputs. The system must be tuned (via low temperature/top-p) to ensure that the same input yields the exact same extraction results every time. This is critical for reliable API integration and UI state management.
+- **Predictability First**: We prioritize strict, consistent extraction. The system must be tuned (via low temperature/top-p) to ensure that the same input yields the exact same extraction results every time. This is critical for reliable order processing.
 
 ## Validation and Safety
-- **Strict Schema Validation**: The system must enforce high standards for AI extraction. If a conversation does not meet the strict schema requirements or contains significant ambiguity, the extraction should fail entirely rather than providing a "best guess," ensuring the manager is notified to handle the data manually for safety.
+- **Strict Schema Validation**: The system must enforce high standards for AI extraction. If an input is ambiguous or does not meet requirements, the agent should politely ask for clarification rather than making a "best guess."
 
-## User Experience (UI/UX)
-- **Simplified Technical View**: The dashboard should prioritize finalized, actionable data for the manager. However, it must include an easily accessible "Technical Details" toggle to expose latency, model metadata, and validation logs for troubleshooting.
+## Agent Interaction Design
+- **Clear Confirmations**: When an order is detected, the agent must provide a clear, itemized summary for the user to confirm.
+- **Graceful Failure**: If the agent cannot process a request, it should provide a clear reason or ask for specific missing information (e.g., quantity, pickup time).
 
 ## State Management
-- **Full Context Re-extraction**: To maintain a consistent source of truth, the system will re-process the entire conversation history from scratch whenever a customer provides a correction or a new message. This ensures the current state always reflects the most up-to-date conversation context.
+- **Full Context Re-extraction**: To maintain a consistent source of truth, the system re-processes relevant conversation history to ensure the current order state always reflects the most up-to-date context provided by the customer.

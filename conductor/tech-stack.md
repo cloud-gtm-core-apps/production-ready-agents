@@ -1,38 +1,31 @@
 # Technology Stack
 
-This project leverages a modern full-stack TypeScript environment optimized for real-time AI processing and dashboard management.
+This project is a Python-based AI agent implementation using the Google Agent Development Kit (ADK) and the A2A SDK.
 
 ## Core Stack
-- **Language:** TypeScript (Strict Mode)
-- **Runtime:** Node.js (v18+)
-- **Package Manager:** npm
+- **Language:** Python 3.12+
+- **Agent Framework:** Google ADK (Agent Development Kit)
+- **Communication Protocol:** A2A SDK (Agent-to-Agent)
+- **Model Interface:** LiteLLM (for multi-model support including Gemini, Vertex AI, and GKE endpoints)
 
-## Frontend
-- **Framework:** React (v18)
-- **Build Tool:** Vite
-- **Routing:** Wouter (Lightweight routing)
-- **State Management:** TanStack Query (React Query)
-- **Styling:** Tailwind CSS (v3), Radix UI (Headless components), Lucide React (Icons)
-- **Animation:** Framer Motion, tailwindcss-animate
+## Backend & Services
+- **Runtime:** Starlette (via A2AStarletteApplication)
+- **Environment Management:** Python venv
+- **Data Validation:** Pydantic
+- **Logging:** Python standard logging
 
-## Backend
-- **Framework:** Express.js
-- **API Style:** RESTful JSON API
-- **Authentication:** Passport.js (Local Strategy), `express-session`, `connect-pg-simple`
-- **Security:** bcrypt (Password hashing)
+## Persistence & State Management
+- **Session Management:** Google ADK Session Service (InMemorySessionService by default, DatabaseSessionService supported)
+- **Memory:** Google ADK Memory Service (InMemoryMemoryService)
+- **Artifacts:** Google ADK Artifact Service (InMemoryArtifactService)
 
-## Database & Persistence
-- **Primary Database:** PostgreSQL
-- **ORM:** Drizzle ORM
-- **Schema Validation:** Zod (using `drizzle-zod` for shared schemas)
-- **Caching/Real-time:** Redis (ioredis) for SSE/Scaling support
+## Integrations
+- **AI Models:** 
+  - Gemini (default: gemini-3-flash-preview)
+  - Vertex AI (optional)
+  - GKE Inference Endpoints (optional)
 
-## Integrations & Services
-- **AI/LLM:** OpenAI SDK (supporting OpenAI and Trucube models)
-- **Communications:** Twilio SDK (SMS integration)
-- **Point of Sale (POS):** Clover API integration
-
-## Infrastructure & Tooling
-- **Database Migrations:** Drizzle Kit
-- **Development Tools:** tsx (TypeScript execution), esbuild (Backend bundling)
-- **Real-time Updates:** Server-Sent Events (SSE) and WebSockets (ws)
+## Development & Testing
+- **CLI Entrypoint:** `main.py`
+- **Verification:** `verify.py` for automated flow testing
+- **Dependency Management:** pip (`requirements.txt`)
