@@ -31,11 +31,15 @@ pip install -r requirements.txt
 ### 2. Configure Credentials
 
 Set Google Cloud credentials:
+* Method A: [User Credentials](https://google.github.io/adk-docs/agents/models/google-gemini/#method-a-user-credentials-for-local-development) (for Local Development)
 ```bash
 export GOOGLE_CLOUD_PROJECT="genai-apps-25"
 export GOOGLE_GENAI_USE_VERTEXAI=TRUE # For Vertex AI
 export GOOGLE_CLOUD_LOCATION="global" 
-# Choose ONE of the following:
+```
+
+* Method B: [Vertex AI Express Mode](https://google.github.io/adk-docs/agents/models/google-gemini/#method-b-vertex-ai-express-mode)
+```bash
 export GOOGLE_API_KEY="your-api-key"              # For Gemini API
 ```
 
