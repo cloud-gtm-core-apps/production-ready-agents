@@ -33,7 +33,6 @@ AGENT_PORT = os.environ.get("AGENT_PORT", "8000")
 AGENT_URL = os.environ.get("AGENT_URL", f"http://127.0.0.1:{AGENT_PORT}")
 AGENT_MODE = os.environ.get("AGENT_MODE", f"{AgentMode.GEMINI.value}")
 SUPPORTED_CONTENT_TYPES = ["text", "text/plain"]
-DB_URL = os.environ.get("DB_URL", "postgresql://postgres:admin@localhost:5432/tickets-db")
 
 
 # adding memory https://google.github.io/adk-docs/sessions/memory/#how-memory-works-in-practice
