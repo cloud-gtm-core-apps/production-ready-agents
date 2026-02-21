@@ -17,7 +17,7 @@ from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
 
 from .strategies import ORDER_DETECTION_SYSTEM_PROMPT
-from .tools import get_current_date, search_tool, record_order, build_menu_context, calculate_order_total
+from .tools import search_tool, build_menu_context
 
 class AgentMode(Enum):
     """Represents the different modes the agent can run in."""
@@ -81,7 +81,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
+            tools=[load_memory, search_tool],
         )
 
 
@@ -94,7 +94,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
+            tools=[load_memory, search_tool],
         )
 
     
@@ -111,7 +111,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, get_current_date, search_tool, record_order, calculate_order_total],
+            tools=[load_memory, search_tool],
         )
 
         return root_agent
