@@ -32,7 +32,7 @@ This document provides essential context for AI models interacting with this pro
 * **Directory Structure Philosophy:**
     * `/app`: Contains the core application logic.
         * `agent.py`: Configuration and initialization of the Agent and Services.
-        * `strategies.py`: Contains system prompts (`ORDER_DETECTION_SYSTEM_PROMPT`) and core business logic functions.
+        * `prompt.py`: Contains system prompts (`ORDER_DETECTION_SYSTEM_PROMPT`) and core business logic functions.
         * `tools.py`: Definitions of tools available to the agent (e.g., date, search).
         * `agent_executor.py`: Adapts the ADK agent for A2A execution.
     * `/plan`: Contains documentation and optimization plans.
