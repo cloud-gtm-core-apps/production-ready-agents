@@ -16,7 +16,7 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
 
-from .strategies import analyze_order_summary, ORDER_DETECTION_SYSTEM_PROMPT
+from .strategies import ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import get_current_date, search_tool, record_order, build_menu_context, calculate_order_total
 
 class AgentMode(Enum):
