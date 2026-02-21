@@ -1,0 +1,150 @@
+{
+  "eval_set_id": "evalset_menu_everything_short",
+  "name": "evalset_menu_everything_short",
+  "eval_cases": [
+    {
+      "eval_id": "case92006d_sub_2",
+      "conversation": [
+        {
+          "invocation_id": "e-e5fb59c2-00bd-40d4-9da1-81c27b573055",
+          "user_content": {
+            "parts": [
+              {
+                "text": "show me the menu again"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Our menu includes:\nPizzas: Cheese ($12.00), Pepperoni ($14.00), Veggie ($13.00)\nSandwiches: Turkey ($10.00), Ham ($10.00), Lunch Special ($12.00)\nDrinks: Soda ($2.50), Water ($1.50)\nWhat can I get for you?",
+                "thought_signature": "EoMECoAEAb4-9vsIySKwIZ0gF24IAYd5M9BkQU8Jh26wwE-XVftaGguWLhbX7RS5KivaAs4EBAG4Fp7Qbpn8ZgCJtlpLK5Rl1BbiGc0Qnpi5SpQUtchpFMUXELdHjQe-LwHXjo7Y4WhFhTJwKES_YVUTwzKWADratl85SFTuxif4EbKguXqHzp2whJZhwsmQKigLMqwO4vGNccCmsmSnUq1KWKYafp033Sui9YnQe6cXSUHAArCuM6XdzuovcQgqdiu86wkxZ-WIw_rk00Uef_6Cj_9u7EEmIpQQe8EE1M9SuaHb2YpP4d4fudZYzspsaMwMCOEuX5awED9jNDwPjeEn0h-_1IZjLqxqkKyCrJGFpMo9QZGqLQh9sPNFP0YZINs-c6-TxMGbJWeFrEbsRBlSIVXlqzCKTHTNCCkjETxTXLQWnj03shillJebcnKnwiCsn3yJKLMo8T-EsHattiiEsIt84m0cnzhN_dzNpxTyN2KivIW2LvF7hOBrSjGRJBVP9-S_RVfqvMd1rZGotI012Wa6NwuRoGXlsGfNs0OsqxmXq33x0HocX2sZxCZspwz3iEZKV60Ot4m8uXh82Tgf594EtmrIzm62HxMvaNGNeJEL8OzVIUS3bRm-zIioCs-J45dMFYoqtyKz0DKMBalX35L1DZDX12GgD6ckArO2Mhg6OdY="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1770922312.113371
+        },
+        {
+          "invocation_id": "e-6e466258-f51c-4c35-b8f4-b4223936c54f",
+          "user_content": {
+            "parts": [
+              {
+                "text": "I want a order of everything on the menu"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "One of everything comes to $75.00. That includes all three pizzas, both sandwiches, the lunch special, a soda, and a water. Is this for pickup or delivery?"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "adk-9c6167b4-ddbc-4409-82cc-e6a3cc35072c",
+                        "args": {
+                          "items": [
+                            "Cheese Pizza",
+                            "Pepperoni Pizza",
+                            "Veggie Pizza",
+                            "Turkey Sandwich",
+                            "Ham Sandwich",
+                            "Lunch Special",
+                            "Soda",
+                            "Water"
+                          ]
+                        },
+                        "name": "calculate_order_total"
+                      },
+                      "thought_signature": "Eq0FCqoFAb4-9vsVyIEnsYbupAQpJtvVHM88SDbaQnpONATIL8Ku_xB_g0w2C27PGw3n1TzbfXE1Gck7s4UKqaMhSGsZbOhzUk0oB6L47jV_p9iEDmlTMTRzULDy9bvjmTtrJooYTG1rjCzH0SxqW0GVwTV4NvGgELRDELyXEYIWWzoHKUmXU7zQqUo5gdxPgjAuALyr6NhJMsqc_FxNGHCvSdNE_BFqONUUw6Ccd9Pak78Z6hXrrYY0KOj0Lnb7w_jjN_ftpP3WdGkhjKU6sx549CvJKmhzrYb_5jdfL6qBLqrB2Sd9Jzfbi82DbkIm_j2MP0bPmd3XxaORcGEs4uvaTZ58EIdNQhemq5wQLoud159bH1L_ftZQDiyrBKJnofromlPoBKD6ThaBkgkiT43G1j5f2iB11WeWuPyb1S6YbVRoPK83IrIWn9Z61hD7cUJJfwqn_tfgYPhzmvrElDM7K7YGVRwvmOoD_5auf2Kt9ii9RWScN9_KDjeo7aqoQOvh16nrNzFoBhw0uLQzrakuA4CYu9X6cNy-w4MQEdOGnPsY1HZKG2v7yldJLsAR3M_vJgKckuhdfBhPhPJvtWFtoBOiCMCWAA4UF9yUAxubYmW4UOn30s4fkgiOFxMSyJK9_KJi3xxxQFEHPdj7fkt7YWinU3mLUtu6FD27zmvRok5YPQEThyjmfXdB98pkCsb2ftplkF054rS3cZ8s9WBJlZOxjjT4JEZEIaEmEy3r00VfDTd6QOHEP2SUDGe5xf2Dsmw9bpz2L0RY6c8H8IJ5Essp4aj0dTC42MAGsWh0NjhxknB8Fu63c3PmD56DSUSnkxfcoRUPsDlJERbBEBlzbTdb71Z7iwP5L4hrh7KhwJjLj3fh243aczQr-mPCZa-op_uHfvs6gsOFogAOIw=="
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "adk-9c6167b4-ddbc-4409-82cc-e6a3cc35072c",
+                        "name": "calculate_order_total",
+                        "response": {
+                          "result": "Total price for Cheese Pizza, Pepperoni Pizza, Veggie Pizza, Turkey Sandwich, Ham Sandwich, Soda, Water: $63.00 (Note: Lunch Special not found in menu)"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              },
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "adk-473be621-2363-4961-923d-e1523f8c32ab",
+                        "args": {
+                          "items": [
+                            "Cheese Pizza",
+                            "Pepperoni Pizza",
+                            "Veggie Pizza",
+                            "Turkey Sandwich",
+                            "Ham Sandwich",
+                            "Lunch Special (1/2 Sandwich + Soup)",
+                            "Soda",
+                            "Water"
+                          ]
+                        },
+                        "name": "calculate_order_total"
+                      },
+                      "thought_signature": "EoUHCoIHAb4-9vvhmsDHCyenFCSwXSOCnS3lFY_qGYnSDpawRUDjD-nI2IOcztzxJfC20Hc_QZlp1SF10_kegmAwI9EDP5PS7LmD74GiKQTsEaQwDHmOt7DyduWr8dz3II7edaUCOecQtOMqTCzS5_aPwx35Vh9sn6vMYDDNg7BoPDW5-9AgswY8KLKhkAAlD_roNYDMWdzELP1qvWnd-hJb6S-Tib8lct-jZZpkdmHe-vjoWoDbnSdmHW_wyM0RJ6XSQpqVlUEt7s2DcMHOr9eCNse9gRYl7dXX7SYnx8VChicNcfyUP1C-PG8ANSDMFfKaPx-53dLCEoXXcO2Kjh_oAUZ3hLdQBepEwgFn21OJtmG2I2yg9gsnm3A_ijY1fZe3imRZ2yUHozjyvUauNOsVkK2mRaQXW5sBp_PtM_ppKKyEgQjSzWIRvRYiHEVcVdssd8r8T8uBHw5ICkgpkOaQZCPGczklqhlNJhQiMIDeZsq_Ejcs5eqWmG7ji1ONTKasB_TE0MIKnsKbqx3EH4lB_8y6QtSRxJjqOA6pMnkv6iEcVu3I3ShnRCcJMQnPxpfk8YG_lqAuutwN5y8jaOksUoocqjjt3iIpdEe6qha_VXguXfTk5TTTUOMFMqQhmubypGUbOguHIQNtRli0ei9BU8vnWuQb-Ng6aE2l8zFfs83adzyBErbl9m57LLsK0GOjQofeOQ-T9g6ihwQ12Gt-Ooz6u3a4J8nrI1VKD37nU18p8BDwVhBhBWDkoZnhyKQ_apevV6YaAyuCiZ09mAqcmQfHFiSQQLXaPIe-tNQ8EfNb1KX76X5obNfpl_jIb2-Md0C1QLkJ5PXgnrpZHGhf0uJ2KF9-b5IOeTM0J46TiFzXai64OExBq6xsEzW7fsJd4rbJqbaIjZeshRXz8sloa-1eWSLQa3Y4YZ_NN8N7rfGmfJuG785DJkEkt2kAMNNideCkcs_0tfngMFL76mjzSn36fHEmVSvTmWcv1S4Hm7oVZ7Uz4BHiOFA7BGc-TVXFcglsJ2PY3rKxNhh_9gTAzwJmerZAYjGwxYbnVIewUnA2byEE6oezFO4t4fOtWFNRxY5D6ynuKWukSqoEKAeE_jghA-BHH_eUMYX8M9WlSYsX5YS2H_33H0LSEfhktRoVodplZ4lD1m-pu2vB1zfDTjwqYHBaoGvXX96GOX3q1lagy4XUWQ=="
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "adk-473be621-2363-4961-923d-e1523f8c32ab",
+                        "name": "calculate_order_total",
+                        "response": {
+                          "result": "Total price for Cheese Pizza, Pepperoni Pizza, Veggie Pizza, Turkey Sandwich, Ham Sandwich, Lunch Special (1/2 Sandwich + Soup), Soda, Water: $75.00"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1770922323.955699
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1770925467.573212
+    }
+  ]
+}

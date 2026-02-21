@@ -1,0 +1,70 @@
+Using evaluation criteria: criteria={'tool_trajectory_avg_score': 0.5, 'response_match_score': 0.7} custom_metrics=None user_simulator_config=None
+Initializing ServiceManager...
+ServiceManager initialized (services will be lazy-loaded).
+Initializing Root Agent with model gemini-3-flash-preview...
+Initializing AdkAgentToA2AExecutor...
+Initializing InMemorySessionService...
+Initializing InMemoryMemoryService...
+Initializing InMemoryArtifactService...
+TOOL CALL: record_order(items=['Cheese Pizza', 'Soda'], customer_name=Customer, notes=Pickup)
+*********************************************************************
+Eval Run Summary
+evalset_intro_menu_pickup:
+  Tests passed: 1
+  Tests failed: 0
+********************************************************************
+Eval Set Id: evalset_intro_menu_pickup
+Eval Id: case92006d_sub_intro_to_pickup
+Overall Eval Status: PASSED
+---------------------------------------------------------------------
+Metric: tool_trajectory_avg_score, Status: PASSED, Score: 0.75, Threshold: 0.5
+---------------------------------------------------------------------
+Metric: response_match_score, Status: PASSED, Score: 0.701929799907407, Threshold: 0.7
+---------------------------------------------------------------------
+Invocation Details:
++----+------------------------+---------------------------+---------------------------+---------------------------+---------------------------+-----------------------------+------------------------+
+|    | prompt                 | expected_response         | actual_response           | expected_tool_calls       | actual_tool_calls         | tool_trajectory_avg_score   | response_match_score   |
++====+========================+===========================+===========================+===========================+===========================+=============================+========================+
+|  0 | Can you introduce      | Hello! I'm your           | I'm your restaurant order |                           |                           | Status: PASSED, Score:      | Status: PASSED, Score: |
+|    | yourself?              | restaurant order          | assistant. I can help you |                           |                           | 1.0                         | 0.7241379310344829     |
+|    |                        | assistant. I can help you | browse the menu,          |                           |                           |                             |                        |
+|    |                        | browse our menu,          | calculate totals, and     |                           |                           |                             |                        |
+|    |                        | calculate prices, and     | place or update orders.   |                           |                           |                             |                        |
+|    |                        | place your order for      | How can I help you today? |                           |                           |                             |                        |
+|    |                        | pickup or delivery. What  |                           |                           |                           |                             |                        |
+|    |                        | can I get started for you |                           |                           |                           |                             |                        |
+|    |                        | today?                    |                           |                           |                           |                             |                        |
++----+------------------------+---------------------------+---------------------------+---------------------------+---------------------------+-----------------------------+------------------------+
+|  1 | what is on the menu?   | Our menu includes:        | Our menu includes: -      |                           |                           | Status: PASSED, Score:      | Status: PASSED, Score: |
+|    |                        | Pizzas: Cheese ($12.00),  | Cheese Pizza: $12.00 -    |                           |                           | 1.0                         | 0.918918918918919      |
+|    |                        | Pepperoni ($14.00),       | Pepperoni Pizza: $14.00 - |                           |                           |                             |                        |
+|    |                        | Veggie ($13.00)           | Veggie Pizza: $13.00 -    |                           |                           |                             |                        |
+|    |                        | Sandwiches: Turkey        | Turkey Sandwich: $10.00 - |                           |                           |                             |                        |
+|    |                        | ($10.00), Ham ($10.00),   | Ham Sandwich: $10.00 -    |                           |                           |                             |                        |
+|    |                        | Lunch Special ($12.00)    | Lunch Special: $12.00 -   |                           |                           |                             |                        |
+|    |                        | Drinks: Soda ($2.50),     | Soda: $2.50 - Water:      |                           |                           |                             |                        |
+|    |                        | Water ($1.50) What would  | $1.50  What would you     |                           |                           |                             |                        |
+|    |                        | you like to order?        | like?                     |                           |                           |                             |                        |
++----+------------------------+---------------------------+---------------------------+---------------------------+---------------------------+-----------------------------+------------------------+
+|  2 | i want a cheese pizza, | OK, a Cheese Pizza        | Great choice! A Cheese    | id='adk-aa7deba5-d348-4d4 | id='adk-0fca761e-838e-4b5 | Status: PASSED, Score:      | Status: PASSED, Score: |
+|    | and a soda.            | ($12.00) and a Soda       | Pizza ($12.00) and a Soda | f-89aa-62381005fd4f'      | 1-8210-9684a07dc5b3'      | 1.0                         | 0.7391304347826088     |
+|    |                        | ($2.50). The total is     | ($2.50) comes to $14.50.  | args={'items': ['Cheese   | args={'items': ['Cheese   |                             |                        |
+|    |                        | $14.50. Is this for       | Would you like this for   | Pizza', 'Soda']} name='ca | Pizza', 'Soda']} name='ca |                             |                        |
+|    |                        | pickup or delivery?       | pickup or delivery?       | lculate_order_total'      | lculate_order_total'      |                             |                        |
+|    |                        |                           |                           | partial_args=None         | partial_args=None         |                             |                        |
+|    |                        |                           |                           | will_continue=None        | will_continue=None        |                             |                        |
++----+------------------------+---------------------------+---------------------------+---------------------------+---------------------------+-----------------------------+------------------------+
+|  3 | pickup please          | Great! I've placed your   | Your order for a Cheese   | id='adk-bae07e1b-72e7-406 | id='adk-da60fecf-8ef8-4e2 | Status: FAILED, Score:      | Status: FAILED, Score: |
+|    |                        | order for pickup. Your    | Pizza and Soda ($14.50    | 3-be3c-9557bd150619'      | 0-b260-d06837e9eb27'      | 0.0                         | 0.425531914893617      |
+|    |                        | total is $14.50. We'll    | total) has been placed    | args={'items': ['Cheese   | args={'notes': 'Pickup',  |                             |                        |
+|    |                        | have it ready for you     | for pickup. What name     | Pizza', 'Soda'], 'notes': | 'items': ['Cheese Pizza', |                             |                        |
+|    |                        | soon. Anything else?      | should I put on the       | 'Pickup order',           | 'Soda'], 'customer_name': |                             |                        |
+|    |                        |                           | order?                    | 'customer_name':          | 'Customer'}               |                             |                        |
+|    |                        |                           |                           | 'Customer'}               | name='record_order'       |                             |                        |
+|    |                        |                           |                           | name='record_order'       | partial_args=None         |                             |                        |
+|    |                        |                           |                           | partial_args=None         | will_continue=None        |                             |                        |
+|    |                        |                           |                           | will_continue=None        |                           |                             |                        |
++----+------------------------+---------------------------+---------------------------+---------------------------+---------------------------+-----------------------------+------------------------+
+
+
+

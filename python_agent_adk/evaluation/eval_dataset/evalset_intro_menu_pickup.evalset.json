@@ -1,0 +1,186 @@
+{
+  "eval_set_id": "evalset_intro_menu_pickup",
+  "name": "evalset_intro_menu_pickup",
+  "eval_cases": [
+    {
+      "eval_id": "case92006d_sub_intro_to_pickup",
+      "conversation": [
+        {
+          "invocation_id": "e-dfa66400-f999-422a-8574-2295d42d328a",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Can you introduce yourself?"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Hello! I'm your restaurant order assistant. I can help you browse our menu, calculate prices, and place your order for pickup or delivery. What can I get started for you today?",
+                "thought_signature": "EpgDCpUDAb4-9vtMJOMcA9WIqktNaxJoae1akIhUDCCyKyIP04fQ6_m_l7l50RJbxrMln3vCqteC-3Ltvq76aVY2ObN8rxtLz-D5RTUn_Wz-WqnU5AqzJIOQQZv_fMGq5ka90CgNnNfXU2RLaX-8Gv2w5k-4x8N7xWIzSsBsPYkq4UsPnEmjyjAK7OLfohBWsv7hF9XUB_IrpWLD44FpJSbxC-UigsSuc4wVTKKyHb1EsZV-Cf8fRhXLnjZtwq7oFJP7NWStUBM0I6OuZ1HAHCFXAwhnwKrOBdwTm1TAP7lux6krPXfsX9917CqA3qWryqdYT6oMXFLFt4ctnLkWFF3--nFuPOJCBlWJ5uGd7PosdrW2siCOAPo2EjVXJpfWfErE1NFc26vm7sCVqZPfweoT4ilMZ8fmKPyExOhSqoMWT9OWl-lU-MRs0AstBTUTRDzoQq8SQIEHEhxpxpKYWRT_8bUYNrU7ksEv2ltAfbK682Tbx2fJZwJ8VTPSewzF9gbSOXfYzhtuEk1WvxwhSSvLlGr7tXwe_xlJ"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1770922246.495631
+        },
+        {
+          "invocation_id": "e-80d853b2-aacd-46c8-87ce-8e5f459a55b0",
+          "user_content": {
+            "parts": [
+              {
+                "text": "what is on the menu?"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Our menu includes:\nPizzas: Cheese ($12.00), Pepperoni ($14.00), Veggie ($13.00)\nSandwiches: Turkey ($10.00), Ham ($10.00), Lunch Special ($12.00)\nDrinks: Soda ($2.50), Water ($1.50)\nWhat would you like to order?",
+                "thought_signature": "EtEFCs4FAb4-9vumAN6R8kaCBGTZsQgHHdBMOPQhjhVt5s7cKKMuFQeFf5xlsUGIV1cirm13dcJxlMFWX0y5Wi8pdLe2O_eoh_zO2j_8vts7XzuE_OHsK_iaSsiPFxVG-DfSSXjTYire5d3kl5fy8a0ZZ1R7Ek2RE3Y-FjsQW8L_NIkCgJyamPFC1J4tSyqhMf7qYBEJZsxMKhHmP-8tXhC0VSWC0dz1s962AlzWjd-SYNqNTYXErGXp3jW__XPV3a-ndAxnVlS4LUIIE9ZPz9LThd_IS8gV3zINadNhiQaxjuiq99HcvGbHSwJwSSYMxvXcDKa8Y7kwszggjWF7UDAQ34VfYIJCorKVDxIXx7JI4cvN4O3nPPzMYZtbuaEB_nzxVJsuU4z5jocvnEUv34s9NctYiX_AJGIb0xaj1Ml-iPAy6va5eMDOeHThHEJpGjTFLbFytgIu2FMzT399NyuYGtqHPA-8ccJibCj41mUalLTa00jONZ1V6UKoI699UMIAWTINx8Ktw3v1AkvKVc96FCvaYR6q_gP5_9bsm05mOIPHH4MjKRkqbEXE7TlO_5_hiBX-_Ap8P288CYwtitILbcd365lkBf4Vf13GZU1nQB9IHlvnECkC_YKw48Au7mVDHks9VIqa5hf6l9GKgSYsO3iWzOVtIpBaWZc8Daq05szchRtYEsbkHQOQOVbQTb4pJcp2Zz9KnedzjFY9453lOEJnaAJ6N1BTZF33bkc8Kirf4X5tHvSZyNjI36guyztBJeqDTpfNpmKT6tB9xbeKOHj0vjQ6PtbfrkqD5PSLYsB8ByHfGfbcH2WojOZgHD_SpzxAW3PM5C8KNMgLbkSu-V24QqtMlqCm5vbFBX9_swf46iJ3P7OSmmfXkco86VoZWvxTcVOtAM36EY-0SUAwnpJkrx7B0WG_4DeW4TgmlXnnCb3MUbcUU7hAhYmay-m3og=="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1770922258.310651
+        },
+        {
+          "invocation_id": "e-8baf92e0-fcf3-4c2d-bf33-89011edb3cc0",
+          "user_content": {
+            "parts": [
+              {
+                "text": "i want a cheese pizza, and a soda. "
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "OK, a Cheese Pizza ($12.00) and a Soda ($2.50). The total is $14.50. Is this for pickup or delivery?"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "adk-aa7deba5-d348-4d4f-89aa-62381005fd4f",
+                        "args": {
+                          "items": [
+                            "Cheese Pizza",
+                            "Soda"
+                          ]
+                        },
+                        "name": "calculate_order_total"
+                      },
+                      "thought_signature": "EqYDCqMDAb4-9vv8FQ9x5jym2i2pU3tWfbtxcIQf2yEjxoaLInC4zshgT8lHy7mmVa1u8kFVeKOh9qwyJHMmX8QgR5-394m-UPKEWT-N-qX0o4fJHZjuWWB9zs5EBCqzygrJl1PZDJvKP8DZJTTAS0gqnWiKj7G9LxIbU4iICcPSCYU_e4GEO2H2ikL8-xYHRwJG65xGQ8V0OyCvUlmfYViG9EGNywQ19uiwvcEtpIVghJCj3fdRKhWKnoo32_szkkkUdQiWPGu429f041GUQCO5w5SURa36r9ZVg0Hh-k6yFCYbbxgiby1nMc9LZKwDYIlFPjHX4znht0Nuz04T0NNbQuI9SmhIGpQnSVs4vsfEPfR7cBPuQAT2YKZfVGHtIJGPwmd4qWvoh73AixoihtLNKmIkG1lnnRBNPLZGsriQKg0y9MWo_vxpQa98G2C4jbFMDjZLMKDPyvnZM2Bnm9vSlGSJtnPDOax_LtfPfeqReJuSO2Pr10FWnjfVyopMMmtPC0pq-zmgITH2FFYxreQsOvxO2CgkBZHKli5leHXAhNQCxmtqE6A="
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "adk-aa7deba5-d348-4d4f-89aa-62381005fd4f",
+                        "name": "calculate_order_total",
+                        "response": {
+                          "result": "Total price for Cheese Pizza, Soda: $14.50"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1770922278.960135
+        },
+        {
+          "invocation_id": "e-a27ca216-013f-4ab2-b274-d1c955ae5e23",
+          "user_content": {
+            "parts": [
+              {
+                "text": "pickup please"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Great! I've placed your order for pickup. Your total is $14.50. We'll have it ready for you soon. Anything else?"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "adk-bae07e1b-72e7-4063-be3c-9557bd150619",
+                        "args": {
+                          "items": [
+                            "Cheese Pizza",
+                            "Soda"
+                          ],
+                          "notes": "Pickup order",
+                          "customer_name": "Customer"
+                        },
+                        "name": "record_order"
+                      },
+                      "thought_signature": "EqkDCqYDAb4-9vtDrWwU5RzosTsFWSqdew7g6_z_91flQ7vTPWAMXVo2GYtcOhViALjtUvnosVDnGl4heympTJtAQvYZ6Rwmxwnglqjcr1yWyvCCiOM81sp2KGpvG7HB3kBb8qJlSJkHaAQLOuM71gdm5IEotnx9GeDweKlUQ4qZZkHEFzFZw52Q-B7iCqJo-EhRpUt_pUVr9Z91x9MkUf3m3yGv4cd7fW0AfYmX4bgVUnw-k1tJyraDyQ5vu1V-1jT0SSk4uQcThAOwkxw8zTsZDAUv2q_FdmfcpQXFqaCHOO34hGbu7vwt50f6lV-0XFNf0SmRMdPD3_45VZu8tJlCZwbJxGOotrW7RbF3WzB_6rwQNxnua7jP-N4PZ1ig5RySiNJGXbEH5cSnLsLUiKifdOOlWoVqTWnX4KrGDzqLeXV0VvczDMM82jV6rhKDe0_VLW0KqcDUbYjDrvZifz47A_Zcr9Y9MW4S_CnoOm2bl3d9YlcVXq3c-mFwJILD1vi7V2YWcqOaAQGkO5y912DrjDwJE5fM_IkgC6Zpb8AnEa90SKufTalfO1Q="
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "restaurant_order_agent",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "adk-bae07e1b-72e7-4063-be3c-9557bd150619",
+                        "name": "record_order",
+                        "response": {
+                          "result": "Order recorded for Customer. Items: Cheese Pizza, Soda"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1770922291.611474
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1770925467.573212
+    }
+  ]
+}
