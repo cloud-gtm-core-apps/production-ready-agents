@@ -146,23 +146,22 @@ This tests:
 - Order detection for pizza orders
 
 ## Evaluation
-**1. Generate a new Eval Set from a Session:**
-If you have a session file exported from adk webui (e.g., `eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.json`), run:
 
+1. Generate a new Eval Set from a Session:
+If you have a session file exported from adk webui (e.g., eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.json), run:
 ```bash
 python generate_evalset_from_session.py eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.json eval
 ```
-*Output:* `eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.evalset.json`
 
-**2. Run Evaluation:**
-Execute the `adk eval` command. Note the inclusion of `export PYTHONPATH=.`.
-
+Output: eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.evalset.json
+2. Run Evaluation:
+Execute the adk eval command. Note the inclusion of export PYTHONPATH=..
 ```bash
 source venv/bin/activate
 adk eval app/ eval/session-a388f51e-8c56-4732-a93c-e72c545d472a.evalset.json
 ```
 
-**3. Run Existing Sample Eval:**
+3. Run Existing Sample Eval:
 ```bash
 source venv/bin/activate
 adk eval app/ eval/eval_dataset/evalset_intro_menu_pickup.evalset.json
@@ -175,11 +174,11 @@ adk eval app eval/eval_dataset/evalset_intro_menu_pickup.evalset.json --config_f
 
 # run with v2
 adk eval app eval/eval_dataset/evalset_intro_menu_pickup.evalset.json --config_file_path=eval/eval_config_2/eval_config.json --print_detailed_results > eval/eval_config_2/evalset_intro_menu_pickup.eval_results.txt
-
-
-python
 ```
 
 This tests:
-- Greeting response
+
+Greeting response
+Order detection for pizza orders
+
 - Order detection for pizza orders
