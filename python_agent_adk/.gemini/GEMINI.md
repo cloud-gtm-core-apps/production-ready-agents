@@ -78,7 +78,7 @@ This document provides essential context for AI models interacting with this pro
 
 ## 7. Specific Instructions for AI Collaboration
 
-* **Prompt Engineering:** modifications to the agent's behavior should primarily happen in `app/strategies.py` by updating `ORDER_DETECTION_SYSTEM_PROMPT` or `RESPONSE_SUGGESTION_SYSTEM_PROMPT`.
+* **Prompt Engineering:** modifications to the agent's behavior should primarily happen in `app/prompt.py` by updating `ORDER_DETECTION_SYSTEM_PROMPT`.
 * **Tool Definition:** New tools should be defined in `app/tools.py` and registered in the `Agent` configuration in `app/agent.py`.
 * **State Management:** The project currently defaults to `InMemorySessionService`. When discussing persistence, be aware that `DatabaseSessionService` is available but not currently active in the default `ServiceManager` configuration.
 * **Environment:** Always remind the user to set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_API_KEY` (or `GOOGLE_CLOUD_LOCATION` for Vertex AI) if they encounter authentication errors.
