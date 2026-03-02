@@ -1,10 +1,5 @@
-import logging
-import json
-from typing import Dict, Any, Optional
 import os
-from enum import Enum
 from google.adk.agents import Agent
-from google.adk.models.lite_llm import LiteLlm
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -12,18 +7,12 @@ from a2a.server.tasks import InMemoryTaskStore
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from .agent_executor import AdkAgentToA2AExecutor
 from google.adk.tools import load_memory
-from google.adk.sessions import DatabaseSessionService, InMemorySessionService
+from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
 
 from .prompt import ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import search_tool, build_menu_context
-
-class AgentMode(Enum):
-    """Represents the different modes the agent can run in."""
-    GEMINI = "Gemini"
-    VERTEXAI = "VertexAI"
-    GKE = "GKE"
 
 # --- Global Initializations ---
 # For SQLite, make sure the directory for the DB file is writable by the Django process.
@@ -31,7 +20,6 @@ class AgentMode(Enum):
 
 AGENT_PORT = os.environ.get("AGENT_PORT", "8000")
 AGENT_URL = os.environ.get("AGENT_URL", f"http://127.0.0.1:{AGENT_PORT}")
-AGENT_MODE = os.environ.get("AGENT_MODE", f"{AgentMode.GEMINI.value}")
 SUPPORTED_CONTENT_TYPES = ["text", "text/plain"]
 
 
@@ -84,38 +72,6 @@ class ServiceManager:
             tools=[load_memory, search_tool],
         )
 
-
-    def _init_vertexai_agent(self):
-        """Initializes the Vertex AI agent."""
-        endpoint_id = os.getenv("VERTEX_AI_ENDPOINT_ID")
-        print(f"Initializing Vertex AI Agent...{endpoint_id}")
-        return Agent(
-            model=LiteLlm(model=f"vertex_ai/openai/{endpoint_id}"),
-            name="restaurant_order_agent",
-            description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, search_tool],
-        )
-
-    
-    def _init_gke_ai_agent(self):
-        """Initializes the GKE AI agent."""
-        api_base_url = os.getenv("GKE_INFERENCE_ENDPOINT")
-        MODEL_NAME = os.getenv("MODEL_NAME") 
-        print(f"Initializing GKE AI Agent: {api_base_url} and {MODEL_NAME}")
-        root_agent = Agent(
-            model=LiteLlm(
-                model=MODEL_NAME,
-                api_base=api_base_url,
-            ),
-            name="restaurant_order_agent",
-            description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-            tools=[load_memory, search_tool],
-        )
-
-        return root_agent
-
     def _init_agent_executor(self):
         """Initializes the agent executor."""
         print("Initializing AdkAgentToA2AExecutor...")
@@ -151,14 +107,7 @@ class ServiceManager:
     def root_agent(self):
         """Lazy-loads and returns the root agent."""
         if self._root_agent is None:
-            if AGENT_MODE == AgentMode.GEMINI.value:
-                self._root_agent = self._init_agent()
-            elif AGENT_MODE == AgentMode.VERTEXAI.value:
-                self._root_agent = self._init_vertexai_agent()
-            elif AGENT_MODE == AgentMode.GKE.value:
-                self._root_agent = self._init_gke_ai_agent()
-            else:
-                raise ValueError(f"Unsupported AGENT_MODE: {AGENT_MODE}")
+            self._root_agent = self._init_agent()
         return self._root_agent
 
     @property
