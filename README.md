@@ -81,3 +81,11 @@ For detailed information on specific components, refer to:
 - [Product Definition](./conductor/product.md)
 - [Design Guidelines](./nodejs_agent/design_guidelines.md)
 - [Optimization Condensed Plan](./nodejs_agent/summary_of_optimizations_plans/ai-summary-optimizations-condensed.md)
+
+## Evaluation
+Run evaluation
+Execute the adk eval command. Note the inclusion of export PYTHONPATH=..
+```bash
+source venv/bin/activate
+adk eval app/ eval/eval_dataset.json
+```
