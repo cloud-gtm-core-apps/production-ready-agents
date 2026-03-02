@@ -8,6 +8,7 @@ vite.config.ts.*
 .local
 python_agent_google-genai/venv/
 .venv
+.adk/
 __pycache__
 .python_agent_adk/venv
 python_agent_adk/venv
