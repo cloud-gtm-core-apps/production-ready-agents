@@ -12,7 +12,7 @@ from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
 
 from .prompt import ORDER_DETECTION_SYSTEM_PROMPT
-from .tools import get_current_date, search_tool, build_menu_context, calculate_order_total
+from .tools import search_tool, build_menu_context
 
 # --- Global Initializations ---
 # For SQLite, make sure the directory for the DB file is writable by the Django process.
@@ -69,7 +69,7 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
-             tools=[load_memory, get_current_date, search_tool, calculate_order_total],
+            tools=[load_memory, search_tool],
         )
 
     def _init_agent_executor(self):
