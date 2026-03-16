@@ -129,7 +129,6 @@ def get_memory_service():
     """Returns the memory service instance from the manager (lazy-loaded)."""
     return _service_manager.memory_service
 
-
 # a2a root & subagents https://google.github.io/adk-docs/a2a/quickstart-consuming/#start-the-remote-prime-agent-server
 def get_agent():
     """Returns the root agent instance from the manager (lazy-loaded)."""
@@ -139,39 +138,5 @@ def get_agent_executor():
     """Returns the agent executor instance from the manager (lazy-loaded)."""
     return _service_manager.agent_executor
 
-# this is used by adk web ui or a2a framework for agent to agent communication.
-adk_web_env = os.environ.get("ADK_WEB_A2A")
-if adk_web_env is None or adk_web_env.strip().lower() == "true":
-    capabilities = AgentCapabilities(streaming=True)
-    skill = AgentSkill(
-        id="restaurant_order_assistant",
-        name="Restaurant Order Assistant",
-        description="Helps customers place restaurant orders and manages order details like items, quantities, and pickup times.",
-        tags=["restaurant", "ordering", "order-management"],
-        examples=["I'd like to order a Pepperoni Pizza for pickup at 7pm", "What's on the menu?", "How much for 2 Cheese Pizzas and a Soda?"],
-    )
-    agent_card = AgentCard(
-        name="OrderFlow Restaurant Assistant",
-        description="An AI-powered assistant that manages restaurant orders, automatically detects order details from SMS, and assists managers with order tracking.",
-        url=f"{AGENT_URL}",
-        version="1.0.0",
-        defaultInputModes=SUPPORTED_CONTENT_TYPES,
-        defaultOutputModes=SUPPORTED_CONTENT_TYPES,
-        capabilities=capabilities,
-        skills=[skill],
-    )
-    # Note: to_a2a() auto-generates an agent card using AgentCardBuilder
-    # The agent card uses the agent's name and description properties
-    # Skills are auto-generated from the agent's tools
-    root_agent = get_agent()
-    # a2a_app = to_a2a(root_agent, port=AGENT_PORT)
-    request_handler = DefaultRequestHandler(
-        agent_executor=get_agent_executor(),
-        task_store=InMemoryTaskStore(),
-    )
-
-    # 2. The Functions Framework will automatically look for this 'app' variable.
-    app = A2AStarletteApplication(
-        agent_card=agent_card,
-        http_handler=request_handler,
-    ).build()
+# Expose the agent instance for ADK Web.. It looks for root_agent global variable in the folder chosen
+root_agent = get_agent()
