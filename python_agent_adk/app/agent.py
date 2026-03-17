@@ -93,7 +93,6 @@ def get_memory_service():
     """Returns the memory service instance from the manager (lazy-loaded)."""
     return _service_manager.memory_service
 
-# a2a root & subagents https://google.github.io/adk-docs/a2a/quickstart-consuming/#start-the-remote-prime-agent-server
 def get_agent():
     """Returns the root agent instance from the manager (lazy-loaded)."""
     return _service_manager.root_agent
