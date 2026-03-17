@@ -1,29 +1,11 @@
 import os
 from google.adk.agents import Agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from google.adk.a2a.utils.agent_to_a2a import to_a2a
-from .agent_executor import AdkAgentToA2AExecutor
 from google.adk.tools import load_memory
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
-
 from .prompt import ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import search_tool, build_menu_context
-
-# --- Global Initializations ---
-# For SQLite, make sure the directory for the DB file is writable by the Django process.
-# Explore using VertexAiSessionService or InMemorySessionService for production https://google.github.io/adk-docs/sessions/session/#managing-sessions-with-a-sessionservice
-
-AGENT_PORT = os.environ.get("AGENT_PORT", "8000")
-AGENT_URL = os.environ.get("AGENT_URL", f"http://127.0.0.1:{AGENT_PORT}")
-SUPPORTED_CONTENT_TYPES = ["text", "text/plain"]
-
-
-# adding memory https://google.github.io/adk-docs/sessions/memory/#how-memory-works-in-practice
 
 # The RAG Corpus name or ID
 # Optional configuration for retrieval
@@ -41,7 +23,6 @@ class ServiceManager:
         self._memory_service = None
         self._artifact_service = None
         self._root_agent = None
-        self._agent_executor = None
         print("ServiceManager initialized (services will be lazy-loaded).")
 
     def _init_session_service(self):
@@ -72,16 +53,6 @@ class ServiceManager:
             tools=[load_memory, search_tool],
         )
 
-    def _init_agent_executor(self):
-        """Initializes the agent executor."""
-        print("Initializing AdkAgentToA2AExecutor...")
-        return AdkAgentToA2AExecutor(
-            self.root_agent, 
-            self.session_service, 
-            self.memory_service,
-            self.artifact_service
-        )
-
     @property
     def session_service(self):
         """Lazy-loads and returns the session service."""
@@ -110,13 +81,6 @@ class ServiceManager:
             self._root_agent = self._init_agent()
         return self._root_agent
 
-    @property
-    def agent_executor(self):
-        """Lazy-loads and returns the agent executor."""
-        if self._agent_executor is None:
-            self._agent_executor = self._init_agent_executor()
-        return self._agent_executor
-
 # Create a single, module-level instance of the service manager.
 # This avoids global variables for each service and centralizes initialization.
 _service_manager = ServiceManager()
@@ -133,10 +97,6 @@ def get_memory_service():
 def get_agent():
     """Returns the root agent instance from the manager (lazy-loaded)."""
     return _service_manager.root_agent
-
-def get_agent_executor():
-    """Returns the agent executor instance from the manager (lazy-loaded)."""
-    return _service_manager.agent_executor
 
 # Expose the agent instance for ADK Web.. It looks for root_agent global variable in the folder chosen
 root_agent = get_agent()
