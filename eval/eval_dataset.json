@@ -1,0 +1,105 @@
+{
+  "eval_set_id": "evalset90fe1b",
+  "name": "evalset90fe1b",
+  "eval_cases": [
+    {
+      "eval_id": "case29be58",
+      "conversation": [
+        {
+          "invocation_id": "e-ca55b537-fd87-4aa5-9f95-12f57988d374",
+          "user_content": {
+            "parts": [
+              {
+                "text": "show me the menu"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Here is our menu:\n\n**Pizzas:**\n- Cheese: $12.00\n- Pepperoni: $14.00\n- Veggie: $13.00\n\n**Sandwiches:**\n- Turkey: $10.00\n- Ham: $10.00\n- Lunch Special: $12.00\n\n**Drinks:**\n- Soda: $2.50\n- Water: $1.50\n\nWhat can I get for you?",
+                "thought_signature": "CswDAY89a1-qiJX1Zhbffj_727OZnYPrIrT4h4Wzuffm7StdGE0Tdc77pezVpgz5-LTk6RFU5RFfiAWzVjt1bjIL_kUHJWmTmckzJdxHAVa4uPMFC4xlC6oigUAYJ-_t2k3e8eQ4D8ZJIj0nBuPK5U6GqXUNQno9Bgt9NCqsrS9ac-EBabHsUWzuX9rboU3Qw2-0rMrJhkHpokXlQUcpaLLTyO2Y00gl6h1EH6tLN_PZOWa7x-WbCkfLqHkw66lUlUDheBQiOg3ORDm7dkScYNaE9GHENnsttmkUBSVdjBKlBxLRZs9pd_7rLpXXtUKvAZyKmWXPeb8ApoBY3-k47eVTnXdxHKsOXgeLRu76eQnHakemWN64vbvhSRAUp0qA_L25P1Gw9R5JCzZ8SFecVmbaB9NztsXcHSmWwwKyjrfuNOq4cLm6VPydsQxJvWTqv_D73GsOIuzoZgwNKAvoXPHgqWSTQnKdm4qSPfqpMGfizcpvjxR28R5wY2DgKkanquBxgxJi_nAkeAOXEF_YHo_SKH9yzPYQ8v8OnQBGC_U-m542dXgK1dUPY6Cu2A1jClaVJvhJny5CPulksJlbpYTZkcnjvmN-6MfCFDAw-w=="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1771655189.31741
+        },
+        {
+          "invocation_id": "e-9768caba-af17-4266-9468-15f71c452995",
+          "user_content": {
+            "parts": [
+              {
+                "text": "I want to order a Cheese Pizza, a Veggie Pizza, and two sodas."
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "I've added those to your order:\n- Cheese Pizza: $12.00\n- Veggie Pizza: $13.00\n- 2 Sodas: $5.00 ($2.50 each)\n\nTotal (with 7.25% tax): $32.18.\n\nWould you like pickup or delivery?",
+                "thought_signature": "CpUGAY89a18bwjX6h5-zqjuh2R716VCXoMolrtlO6seb8GQCCQm9w9_-pP_foTvmlPEwSPzOYcMN7yk7aFRjJ7o1SZf1HJG316VCiogUVC9GGv0l66fLmaUr2c0L1f6WWCyZ8_gwdNEkWQV8onDOKpzPM3Zmgjhv-68QgQ0vUPB78wjfe_vfPorp0FVf25V3ec6gOXchrFqoSMYqxsYCnuqePx7_9PnbXO16L6Tj-dS7vQyPA_eG9lSxQE92LjvcgySv2LRMnLl8T20-X0JIIB7Am_98q2sPAYyVneXnz7FhtuHN2v1BMew4QhT-v3pO3jHdZuPkDVzE8clCUeFlLoIsV2BHNdU5lSmEYG-eOFp45kpUPFh8anYvRzb7FoJze_H1RN8NFBQu2dLs_i_Y5STVnOgAa0-QaDMFZNCE1TS97lSQSq4caA-W7X12xs442uxIEeolWmgLI02czWXHt9yoRvdlGHeMD8iwZxBTZCLxKk5rY3r4CyPj-L7Yy3D2z14hIdTX6wqUU-bJS7wVwaDs1fxyQ_S1-2-d6TKrGjWQk41HFXT8b0RAJRYlm2F93lrt48esG2uphcZ4dPJiyN0CtGoXmXd1EYJUXFveJ_xSrH8WJ9at7EfUd_1WJ14pxLB26vynUWkRhDVPgtqBuFJjVLTozjK_kL3c6whUAYxt04Y2WFrxdM_cD0zEF5TP2If4d_ggsm8l5nqMp88tZZEH5G5PdlQvXDgeAJCTgIgSJuS8AbDQ8bf6QLoMDWMekPAIVkeblh6YrV_nRDZhmjliDCfa28JUuGnBwSOmHSHM1vMZGhXEKa2rV838XvvYtRXjbinttUOA1OCjT3dGOmghJNeRyE6QW1cDHGG7ZbhnBjiPKIeiE92xRN1mU4hWyYt7ZdGh5WFbrIj4GKkDuRat0hZ3DXJ3gHZrXGgaebN3_M1Tj_U-OfE2CN0wzbXtmUZDHu_7WP1OakMZpxOyJk0AqCjfwbJ9SpGH0PQE-bXYe5lmJIA1Txk7oln_uAVQXjMqExPI1JHIaOT-yzQSxW89H8RnM-F7"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1771655208.618744
+        },
+        {
+          "invocation_id": "e-c4da4550-d400-40cc-bbca-56dbf330be40",
+          "user_content": {
+            "parts": [
+              {
+                "text": "the address is 1205 4th ave los angeles 90019"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "I have your delivery address as 1205 4th Ave, Los Angeles 90019. Are there any additional delivery instructions or gate codes we should know about?",
+                "thought_signature": "CtgFAY89a19ppYE4cjdTcXF0LSxBOwNf9oLeiGChqhjrgUcUmhfhMYVaE3vsIx43xnoBJiCjmc3tlDzbZ_sChNYsG-vj-E2QH9Rs2JZt_Cf1lq5myb1s0A3_qF43PYlDUdGf_Ydcrvvg2etE-xMt8HrViPunYrpv5z9VLJl5Z5Leo04kEds8uiFzvC-5l2qkv_CpMEwBUzEnecW9h0gy3v0mXjztlyECt8SPMzPaY4oUABqxYgIgaY3L2oVr8APWAhTXO9ty9TcGa0cEiT3Cqh96ZCnFGfW9V7A6y0sWdpj5xZ5sE8Tkk-wMx9q0rLAOkmjj0lZPZOOAAn5Q5IgK80peDbNbA_6vdjjsnhP9ugaZejlUqj03nYbSR0sfo-OHGejrgynj4fIQ1pJd8qVqhRmTRWcJ4P3yxKNJHTisRlZo-XQeNgexbET1GklyIm2kNKATLfw4D8_PiQ3M7FQ2xQ1UCKegKL0ms8sPfRYPVYI3r_eOPH7scIt3l1bvPScciqqD-qALsI63DQQfIJPM0wXWprZj4kcqiCFsNiLzfEpZOhH23A9TCil6kyZM1YvP6TxMxrr5vWSZZhN6ZT5vHcnQfxvTWZju2QDbGbAMnK7TfioFbr1ehfEyhiDWrn_OM5WGIJp71V2hOcQjr6RvkQD_l5YujxZvCAJwdK3jfbXis0zM7mJiZzzn-VNzvmzGzwB9exC1oNyjkdwcU4lmN65wx8j6FndszVpRv2KhtjvgpTCH3Y4jCgGCDcUe4v1CAyVo40CDgh4eKw8zOP0AOCy2TBp0rKC7Olt1o04rmtPtpDML0aImK-7x3YIkqQsOJ4h5-sXJ40-lP73tqLEbUH-toBwp8f26sjsObFvMgBSgLt1mqSbdEdiS6XXzOceSOQsCn3Q5YKoydt2vpdRFKdQNIbFX-P8mY0LWsLESkTLVbD5_jgfYiW78eD9mmaC7ijem-WsrkrVNQ5c="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1771655255.697977
+        },
+        {
+          "invocation_id": "e-9c02a4c1-f555-447d-8e2f-f924f374cbc0",
+          "user_content": {
+            "parts": [
+              {
+                "text": "give me a receipt"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "**Receipt:**\nCheese Pizza: $12.00\nVeggie Pizza: $13.00\n2 Sodas: $5.00\nTax (7.25%): $2.18\n**Total: $32.18**\n\nDelivery to: 1205 4th Ave, Los Angeles 90019. Are there any special delivery instructions?",
+                "thought_signature": "CqwLAY89a1-ART2ElBAYoBaM7zUpOinUlLdpB8cSfEKPbM4Qr6oPSfmW3xh8m2HN3pBuzCIDXL0MmMCxZTOmK4HzY-knQEGhfoLqdjg88mThcVpIg7l24SqU92pZLpHqLHXLpYR0FXVtlJeOCgVh3k6tTFMLQfJo_RzGHdUkOtZKKpyEIY5EP-OZE0et6e2ZHdIMQvnplRNJBTPKUjfzAYYH8dJckf_3k_C2-3f_8m55FVqGZnCXc3aV0dxqm4hIyaMr8Zhf9QiIxnBLFc20V7kGEej8sgAyK059Cn9M9ogEIDHkqn1Hpigao8O_j0eJhNihQ3WI3BVAI7cFM_DZGX-M0Fb5caTTQgxC6KPuv9J04X42n3imxudHQU7BQ6bDLdojowUcSEnAtebZhdFDRVkbObXQt1-gVGAcINy_cglMn3Jm6J8N2gcEN6e5m5vRGV0cYdSfBq_99-oSbyDhF66fDH10s-uCytrR_Uo66muGfJ-jAB1HmAu2bQC3cyJrZB5hbqwA4kX1b8IESkfSOX1fLZllKI-JSqWth7IC3idEbCvTNudOJF6u1_QnJAV8wRtxmzPScDPFivZDXCyHAuU1F42e_HIyDC8RjAu_NeE-osdYNfTIT4N2_DrClXt9OekHvcE1gwQgeVpa9WC2Elu2VPqa256E8HQ7notlR8o6KnjGlXQ7yXec_xxeyu_3WkwaHjka6oBSbtyujbabQBsA2by7trL4_CyWlTkNxc9B466DRpOjG1t8W1SQFBHln12KWDnJw4mQ26-d1hG5qloQRPjpICq4oK-_dNRoSe8pWNMXwo3h8WD0GTXA8wxBD0xt15woQHA7JWYl-df7hkP8Epa8L9KADq6odCH-mTOd7pFLl2aqMvFFmyaz01hXqwGy_ZnpIeyV9yo5UYR8E_NyjFY2l6lguVnu49I8qLWVjmRqJGsuoI46Jt57X9GPsyMqnCz0lZYecILtjv-yXFrC735xJhfIaDqy1WDAxIHAcQBM3KObK6hNUwYEGCvuk2bX3UzpZenO4PiszqggaGgC1hW4jXshSZg3k5FduzI68jFmgqzjeTMIrqj1_udmBCVAxTDGYVmjmgKK0tk1eKY9GAqWxp1qtLPTwgV8EAAa-Ym38VmqJmv-CRjHYgulsn-L8upUj0bvMv7AdSYl8TsvDzyBHR43zJyqxxrr-bL7S4JDnfLCp0fo1Qrxn9Tt2lVuYmEL1v1EE4q5Pl_OkdCU_OQtVLHjoVqPqPLGf9QFloyGUTKTMQ6bS8sgkjx89f76LVYuxvup-kACfljKNSJ35uLna7CSqRFRKBaMdPiguNvJR_6NVIEhrs2VX0GX13TdaxAcCYd0gKl5oZiFk_pXMfHUgDlLIM0IBQkavQyrTFGTC8yQQDaw-ye9DRzQrbuSY6q4Cr3BRyX48H8z0E1ND0X168wVjtMwiGIIxJm3LHNAcLWh4lK4yQZIjbcxsXq1JT5xiqziY_n0L-xKbM21971sfmvz7ocIjX0fgJZ4Hp-2LNSb1ri_mO5KNtE8Sx17CnWjdgi-xERCwxthm3F3Y-K3T7BRFgTg3yUdNkCkljIhhLiJmIGQdgqeCGSA8e5It1MyffmNTvXk1yYQE4nWXCpec3esuhoEH1PiAd-mmiD38E1mApgxtiTSUsz55awP4pPmMeV7uO-4-an3_W6yScoWerPAQfCqFCcXFm_XbDGaaJbfW3naU_b39nIcAMMOV6gi_MLT4kiBgvDiHWQ_hFSlduD853exnjVz4qQSlmyBxPNoQmAQm1gz4axc8qb7eiD8GVFFtjleSHor3UFSbr6GPUP4Bw1jFdtWCLhOOw99B_RMesrxtTiNEoGC6zT8n7oHJi5m0M4RXLGQfRGZ38tClZI4zqyzUaxiHGgO52GBi-jYcxYO2P4aHHxQhn7tFzSZWgpqZyqcra8R"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1771655287.325848
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1771657401.564801
+    }
+  ],
+  "creation_timestamp": 1771657394.992007
+}

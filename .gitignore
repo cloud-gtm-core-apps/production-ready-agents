@@ -1,0 +1,14 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+.env
+.local
+python_agent_google-genai/venv/
+.venv
+.adk/
+__pycache__
+.python_agent_adk/venv
+python_agent_adk/venv
