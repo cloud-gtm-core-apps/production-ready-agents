@@ -1,107 +1,94 @@
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import EventQueue
-from a2a.utils.errors import ServerError
-from a2a.types import (
-    Part,
-    Task,
-    TaskState,
-    TextPart,
-    UnsupportedOperationError,
-)
-from a2a.utils import (
-    new_agent_parts_message,
-    new_agent_text_message,
-    new_task,
-)
-from a2a.server.tasks import TaskUpdater
+import asyncio
+from google.adk.runners import Runner
+from app.agent import root_agent, get_session_service, get_memory_service, get_artifact_service
 
-from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
-from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
-from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai.types import Content
 
-from google.adk.agents.base_agent import BaseAgent
-from google.adk.runners import Runner
+class SimpleAgentRunner:
+    """
+    A simplified runner that interacts with the root_agent directly.
+    Replaces the complex AdkAgentToA2AExecutor.
+    """
+    def __init__(self):
+        # Initialize the Runner with services from agent.py
+        self.runner = Runner(
+            app_name="restaurant_order_agent",
+            agent=root_agent,
+            session_service=get_session_service(),
+            memory_service=get_memory_service(),
+            artifact_service=get_artifact_service()
+        )
 
-
-class AdkAgentToA2AExecutor(AgentExecutor):
-    _runner: Runner
-
-    def __init__(
-        self,
-        agent: BaseAgent = None,
-        session_service=InMemorySessionService(),
-        memory_service=InMemoryMemoryService(),
-        artifact_service=InMemoryArtifactService(),
-        runner: Runner = None
-    ):
-        self.name = "restaurant_order_agent"
-        if runner is not None:
-            self._runner = runner
-        else:
-            self._runner = Runner(
-                app_name=self.name,
-                agent=agent,
-                session_service=session_service,
-                artifact_service=artifact_service,
-                memory_service=memory_service,
-            )
-        self.agent = agent
-        self._user_id = "remote_agent"
-
-    async def execute(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-    ) -> None:
-        query = context.get_user_input()
-        task = context.current_task
-
-        if not task:
-            if not context.message:
-                return
-
-            task = new_task(context.message)
-            await event_queue.enqueue_event(task)
-
-        updater = TaskUpdater(event_queue, task.id, task.context_id)
-        session_id = task.context_id
-
-        session = await self._runner.session_service.get_session(
-            app_name=self.name,
-            user_id=self._user_id,
-            session_id=session_id,
+    async def chat(self, user_id: str, session_id: str, message: str):
+        """Sends a message and prints the response."""
+        
+        # Ensure the session exists before running
+        session = await self.runner.session_service.get_session(
+            app_name=self.runner.app_name,
+            user_id=user_id,
+            session_id=session_id
         )
         if session is None:
-            session = await self._runner.session_service.create_session(
-                app_name=self.name,
-                user_id=self._user_id,
-                state={},
+            await self.runner.session_service.create_session(
+                app_name=self.runner.app_name,
+                user_id=user_id,
                 session_id=session_id,
+                state={}
             )
 
-        content = Content(role="user", parts=[{"text": query}])
+        print("Agent: ", end="", flush=True)
 
-        full_response_text = ""
+        content = Content(role="user", parts=[{"text": message}])
 
-        # Working status
-        await updater.start_work()
+        # run_async handles everything: history, tool calls, and LLM orchestration
+        async for event in self.runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content
+        ):
+            # Detect tool calls to show the user the agent is working
+            func_calls = event.get_function_calls()
+            if func_calls:
+                for fc in func_calls:
+                    print(f"\n[Tool: {fc.name}]", end="", flush=True)
 
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    # Safely extract text from the parts
+                    text_parts = [p.text for p in event.content.parts if p.text]
+                    if text_parts:
+                        print(" ".join(text_parts))
+                    else:
+                        print("[Done (no text response)]")
+
+async def main():
+    bot = SimpleAgentRunner()
+    print("--- Starting Restaurant Order Agent (Interactive Mode) ---")
+    print("(Type 'exit' or 'quit' to stop, or press Ctrl+C/Ctrl+D)")
+    
+    user_id = "user_1"
+    session_id = f"session_{int(asyncio.get_event_loop().time())}" # Unique session per run
+
+    while True:
         try:
-            async for event in self._runner.run_async(
-                user_id=self._user_id, session_id=session.id, new_message=content
-            ):
-                if event.is_final_response():
-                    if event.content and event.content.parts and event.content.parts[0].text:
-                        await updater.add_artifact(
-                            [Part(root=TextPart(text=event.content.parts[0].text))], name='response'
-                        )
-                        await updater.complete()
-        except Exception as e:
-            await updater.failed(message=new_agent_text_message(f"Task failed with error: {e}"))
+            # input() is blocking but acceptable for this CLI
+            user_input = input("\nYou: ")
+            
+            if user_input.lower() in ["exit", "quit"]:
+                print("Goodbye!")
+                return
+            
+            if not user_input.strip():
+                continue
 
+            await bot.chat(user_id, session_id, user_input)
+        except (KeyboardInterrupt, EOFError):
+            print("\nGoodbye!")
+            return
 
-    async def cancel(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> None:
-        raise ServerError(error=UnsupportedOperationError())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Catch interaction with asyncio.run's own signal handling
+        pass

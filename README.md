@@ -1,5 +1,7 @@
 # Agent Optimizations - Restaurant Order Assistant
 
+This project is a **Restaurant Order Assistant** built using the **Agent Development Kit (ADK)**. It helps customers find menu items, place orders, and check status using Gemini.
+
 ## 📂 Project Structure
 
 ```
@@ -7,7 +9,7 @@
 ├── app/
 │   ├── __init__.py
 │   ├── agent.py              # ServiceManager, Agent configuration
-│   ├── agent_executor.py     # ADK AgentExecutor for A2A integration
+│   ├── agent_executor.py     # Simplified ADK Runner (Main Entry point)
 │   ├── prompt.py             # System prompts and AI logic
 │   └── tools.py              # Menu definitions and agent tools
 ├── eval/
@@ -19,6 +21,7 @@
 
 ### 1. Set Up Environment
 
+First, create and activate a virtual environment:
 ```bash
 # Create and activate virtual environment
 python3 -m venv venv
@@ -30,95 +33,41 @@ pip install -r requirements.txt
 
 ### 2. Configure Credentials
 
-Set Google Cloud credentials:
-* Method A: [User Credentials](https://google.github.io/adk-docs/agents/models/google-gemini/#method-a-user-credentials-for-local-development) (for Local Development)
+Set your Google Cloud project and environment variables:
 ```bash
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_GENAI_USE_VERTEXAI=TRUE # For Vertex AI
-export GOOGLE_CLOUD_LOCATION="us-central1" 
-```
-
-* Method B: [Vertex AI Express Mode](https://google.github.io/adk-docs/agents/models/google-gemini/#method-b-vertex-ai-express-mode)
-```bash
-export GOOGLE_API_KEY="your-api-key"              # For Gemini API
+export GOOGLE_CLOUD_PROJECT="<GCP-project-ID>"
+export GOOGLE_GENAI_USE_VERTEXAI=TRUE
+export GOOGLE_CLOUD_LOCATION="global"
+export VERTEXAI_LOCATION="global"
 ```
 
 ### 3. Run the Agent
 
-Run the agent with the ADK web interface:
-```bash
-adk web
-```
+You can run the agent in several ways:
 
-Alternatively, run in CLI mode:
+**A. Interactive CLI Mode (Best for Testing)**
+Start a live, real-time chat with the agent directly in your terminal:
 ```bash
-adk run
+python3 -m app.agent_executor
+```
+*(Supports tool-calling visibility and graceful exit with `Ctrl+C`)*
+
+**B. ADK Web Interface**
+Launch a rich, graphical chat UI (use `--allow_origins="*"` to avoid CORS issues on cloud shell editor):
+```bash
+adk web --allow_origins="*"
 ```
 
 ## 🏗️ Architecture
 
-```
-ServiceManager (app/agent.py)
-  ├─> get_agent() → ADK Agent with ORDER_DETECTION_SYSTEM_PROMPT
-  ├─> get_session_service() → InMemorySessionService  
-  └─> get_memory_service() → InMemoryMemoryService
-Runner (google.adk.runners)
-  └─> run_async() → Executes agent via agent_executor pattern
-```
-
-## 📝 Key Components
-
-### Agent Configuration (`app/agent.py`)
-- Uses standard ADK `Agent` class
-- Model: `gemini-3-flash-preview`
-- Name: `restaurant_order_agent`
-- Instruction: `ORDER_DETECTION_SYSTEM_PROMPT` from `app/prompt.py`
-- Tools: `load_memory`, `search_tool`
-- Session: `InMemorySessionService` (no database required)
-
-### System Prompts (`app/prompt.py`)
-- **`ORDER_DETECTION_SYSTEM_PROMPT`**: Main agent instruction with menu and guidelines
-
-### Tools (`app/tools.py`)
-- `search_tool`: Google search capability via AgentTool
-- `build_menu_context()`: Helper to inject menu items into system prompt
-
-## 🔧 Recent Updates
-
-### Runtime Errors Fixed
-1. ✅ Import errors (duplicate Agent import, missing tools)
-2. ✅ Created `tools.py` module
-3. ✅ Switched to `InMemorySessionService` (no PostgreSQL needed)
-4. ✅ Fixed template variable in `ORDER_DETECTION_SYSTEM_PROMPT`
-
-### Architecture Changes
-- Removed custom `OrderFlowAgent` class
-- Now uses standard ADK `Agent` with proper configuration
-- Integrated `agent_executor.py` for A2A compatibility
-- Simplified tools and dependencies
-
-## 📋 Menu
-
-The agent can help with orders from this menu:
-
-**Pizzas:**
-- Cheese Pizza: $12.00
-- Pepperoni Pizza: $14.00
-- Veggie Pizza: $13.00
-
-**Sandwiches:**
-- Turkey Sandwich: $10.00
-- Ham Sandwich: $10.00
-- Lunch Special (1/2 Sandwich + Soup): $12.00
-
-**Drinks:**
-- Soda: $2.50
-- Water: $1.50
+- **`app/agent.py`**: Centralizes the `Agent` definition and services (Session, Memory, Artifacts).
+- **`app/prompt.py`**: Defines the system persona and business rules.
+- **`app/tools.py`**: Contains the menu logic and external search capabilities.
+- **`app/agent_executor.py`**: A streamlined implementation of the `Runner` that handles conversation state and execution without framework overhead.
 
 ## ✅ Evaluation
 
-Evaluation cases are stored in:
+Evaluation cases are stored in `eval/eval_dataset.json`. You can run evaluations using:
 ```bash
-eval/eval_dataset.json
+adk eval run --input eval/eval_dataset.json
 ```
-
