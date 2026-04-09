@@ -46,6 +46,7 @@ class ServiceManager:
         """Initializes the root agent."""
         print("Initializing Root Agent...")
         return Agent(
+            # model="gemini-3-flash-preview",
             model="gemini-3-flash-preview",
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
@@ -96,6 +97,10 @@ def get_memory_service():
 def get_agent():
     """Returns the root agent instance from the manager (lazy-loaded)."""
     return _service_manager.root_agent
+
+def get_artifact_service():
+    """Returns the artifact service instance from the manager (lazy-loaded)."""
+    return _service_manager.artifact_service
 
 # Expose the agent instance for ADK Web.. It looks for root_agent global variable in the folder chosen
 root_agent = get_agent()
