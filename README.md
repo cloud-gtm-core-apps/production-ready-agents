@@ -58,18 +58,12 @@ Launch a rich, graphical chat UI (use `--allow_origins="*"` to avoid CORS issues
 adk web --allow_origins="*"
 ```
 
-**C. ADK CLI**
-Run a one-off command session:
-```bash
-adk run
-```
-
 ## 🏗️ Architecture
 
 - **`app/agent.py`**: Centralizes the `Agent` definition and services (Session, Memory, Artifacts).
-- **`app/agent_executor.py`**: A streamlined implementation of the `Runner` that handles conversation state and execution without framework overhead.
 - **`app/prompt.py`**: Defines the system persona and business rules.
 - **`app/tools.py`**: Contains the menu logic and external search capabilities.
+- **`app/agent_executor.py`**: A streamlined implementation of the `Runner` that handles conversation state and execution without framework overhead.
 
 ## ✅ Evaluation
 
