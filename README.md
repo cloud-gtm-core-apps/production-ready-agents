@@ -33,11 +33,12 @@ pip install -r requirements.txt
 
 ### 2. Configure Credentials
 
-Set your Google Cloud project and enable Vertex AI:
+Set your Google Cloud project and environment variables:
 ```bash
-export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_PROJECT="<GCP-project-ID>"
 export GOOGLE_GENAI_USE_VERTEXAI=TRUE
-export GOOGLE_CLOUD_LOCATION="us-central1" 
+export GOOGLE_CLOUD_LOCATION="global"
+export VERTEXAI_LOCATION="global"
 ```
 
 ### 3. Run the Agent
@@ -52,9 +53,9 @@ python3 -m app.agent_executor
 *(Supports tool-calling visibility and graceful exit with `Ctrl+C`)*
 
 **B. ADK Web Interface**
-Launch a rich, graphical chat UI:
+Launch a rich, graphical chat UI (use `--allow_origins="*"` to avoid CORS issues on cloud shell editor):
 ```bash
-adk web
+adk web --allow_origins="*"
 ```
 
 **C. ADK CLI**
