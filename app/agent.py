@@ -7,11 +7,6 @@ from google.adk.artifacts import InMemoryArtifactService
 from .prompt import ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import search_tool, build_menu_context
 
-# The RAG Corpus name or ID
-# Optional configuration for retrieval
-SIMILARITY_TOP_K = 5
-VECTOR_DISTANCE_THRESHOLD = 0.7
-
 
 class ServiceManager:
     """A centralized manager for agent-related services."""
@@ -33,8 +28,6 @@ class ServiceManager:
     def _init_memory_service(self):
         """Initializes the memory service."""
         print("Initializing InMemoryMemoryService...")
-        # For RAG-based persistent memory, you would use https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview
-        # return memory-bank
         return InMemoryMemoryService()
 
     def _init_artifact_service(self):
@@ -46,7 +39,6 @@ class ServiceManager:
         """Initializes the root agent."""
         print("Initializing Root Agent...")
         return Agent(
-            # model="gemini-3-flash-preview",
             model="gemini-3-flash-preview",
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
