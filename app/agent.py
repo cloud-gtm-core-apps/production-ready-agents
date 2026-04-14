@@ -4,9 +4,10 @@ from google.adk.tools import load_memory
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
-from .prompt import ORDER_DETECTION_SYSTEM_PROMPT
 from .tools import search_tool, build_menu_context
-
+from google.adk.models import Gemini
+from .config import settings
+from .prompts.prompt_manager import PromptManager
 
 class ServiceManager:
     """A centralized manager for agent-related services."""
@@ -18,6 +19,7 @@ class ServiceManager:
         self._memory_service = None
         self._artifact_service = None
         self._root_agent = None
+        self._prompt_manager = PromptManager()
         print("ServiceManager initialized (services will be lazy-loaded).")
 
     def _init_session_service(self):
@@ -37,14 +39,22 @@ class ServiceManager:
 
     def _init_agent(self):
         """Initializes the root agent."""
-        print("Initializing Root Agent...")
+        print(f"Initializing Root Agent with model {settings.model.model_name}...")
         return Agent(
-            model="gemini-3-flash-preview",
+            model=Gemini(
+                model=settings.model.model_name,
+            ),
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
-            instruction=ORDER_DETECTION_SYSTEM_PROMPT.format(menu_context=build_menu_context()),
+            instruction=self._get_instruction(),
             tools=[load_memory, search_tool],
         )
+
+    def _get_instruction(self):
+        """Retrieves and formats the instruction from PromptManager."""
+        raw_prompt = self._prompt_manager.get_prompt("order_detection")
+        return raw_prompt.format(menu_context=build_menu_context())
+
 
     @property
     def session_service(self):
@@ -79,8 +89,8 @@ class ServiceManager:
 _service_manager = ServiceManager()
 
 def get_agent():
-    """Returns the root agent instance from the manager (lazy-loaded)."""
-    return _service_manager.root_agent
+   """Returns the root agent instance from the manager (lazy-loaded)."""
+   return _service_manager.root_agent
 
-# Expose the agent instance for ADK Web. It looks for root_agent global variable in the folder chosen
 root_agent = get_agent()
+
