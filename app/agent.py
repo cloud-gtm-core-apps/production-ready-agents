@@ -78,21 +78,9 @@ class ServiceManager:
 # This avoids global variables for each service and centralizes initialization.
 _service_manager = ServiceManager()
 
-def get_session_service():
-    """Returns the session service instance from the manager (lazy-loaded)."""
-    return _service_manager.session_service
-
-def get_memory_service():
-    """Returns the memory service instance from the manager (lazy-loaded)."""
-    return _service_manager.memory_service
-
 def get_agent():
     """Returns the root agent instance from the manager (lazy-loaded)."""
     return _service_manager.root_agent
 
-def get_artifact_service():
-    """Returns the artifact service instance from the manager (lazy-loaded)."""
-    return _service_manager.artifact_service
-
-# Expose the agent instance for ADK Web.. It looks for root_agent global variable in the folder chosen
+# Expose the agent instance for ADK Web. It looks for root_agent global variable in the folder chosen
 root_agent = get_agent()
