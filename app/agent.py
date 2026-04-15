@@ -4,10 +4,13 @@ from google.adk.tools import load_memory
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.artifacts import InMemoryArtifactService
-from .tools import search_tool, build_menu_context
+from .tools import search_tool, build_menu_context, calculate_order_total
+from google.genai.types import GenerateContentConfig
 from google.adk.models import Gemini
 from .config import settings
 from .prompts.prompt_manager import PromptManager
+from .schemas import OrderSummaryResult
+from .callbacks import before_model_callback, after_model_callback
 
 class ServiceManager:
     """A centralized manager for agent-related services."""
@@ -47,7 +50,15 @@ class ServiceManager:
             name="restaurant_order_agent",
             description="An agent to help users with restaurant ordering, including searching, creating, and updating orders for customers.",
             instruction=self._get_instruction(),
-            tools=[load_memory, search_tool],
+            tools=[load_memory, search_tool, calculate_order_total],
+            before_model_callback=before_model_callback,
+            after_model_callback=after_model_callback,
+            output_schema=OrderSummaryResult,
+            generate_content_config=GenerateContentConfig(
+                temperature=0.0,
+                top_p=1.0,
+                max_output_tokens=settings.model.max_tokens
+            )
         )
 
     def _get_instruction(self):
@@ -89,8 +100,7 @@ class ServiceManager:
 _service_manager = ServiceManager()
 
 def get_agent():
-   """Returns the root agent instance from the manager (lazy-loaded)."""
-   return _service_manager.root_agent
+    """Returns the root agent instance from the manager (lazy-loaded)."""
+    return _service_manager.root_agent
 
 root_agent = get_agent()
-
