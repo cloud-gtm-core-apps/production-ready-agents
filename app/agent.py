@@ -11,6 +11,8 @@ from .config import settings
 from .prompts.prompt_manager import PromptManager
 from .schemas import OrderSummaryResult
 from .callbacks import before_model_callback, after_model_callback
+from google.adk.agents.context_cache_config import ContextCacheConfig
+from google.adk.apps import App
 
 class ServiceManager:
     """A centralized manager for agent-related services."""
@@ -22,6 +24,7 @@ class ServiceManager:
         self._memory_service = None
         self._artifact_service = None
         self._root_agent = None
+        self._app = None
         self._prompt_manager = PromptManager()
         print("ServiceManager initialized (services will be lazy-loaded).")
 
@@ -64,8 +67,31 @@ class ServiceManager:
     def _get_instruction(self):
         """Retrieves and formats the instruction from PromptManager."""
         raw_prompt = self._prompt_manager.get_prompt("order_detection")
-        return raw_prompt.format(menu_context=build_menu_context())
-
+        instruction = raw_prompt.format(menu_context=build_menu_context())
+        
+        # --- DEMO: CONTEXT INFLATOR (2026 Re-Refined Standard) ---
+        # NOTE: 2026 Documentation states a 2,048 token minimum for Gemini 2.0+.
+        # HOWEVER, we target ~8,192 tokens here as a 'Safe Zone' for cross-region
+        # reliability and to ensure high-impact visual proof in the ADK Web UI.
+        #
+        # Caveat: While 2,048 is the new standard, some regional Vertex AI 
+        # configurations may still have slightly higher automatic trigger thresholds.
+        # 8,000 tokens (~32k characters) is lean enough for zero-latency but 
+        # guaranteed to trigger caching stats in almost all environments.
+        if settings.inflate_context:
+            # Padding to hit the ~8,192 token 'Safe Zone' (approx 32k characters)
+            #This is address the required tokens before the caching can happen
+            padding_block = "DEMO_PADDING_TEXT_RELIABLE_8K_THRESHOLD_" * 40
+            padding = "\n" + (padding_block + "\n") * 20
+            instruction += padding
+            
+            # Store approximate padding token count (heuristic: 4 chars/token)
+            os.environ["DEMO_PADDING_TOKENS"] = str(len(padding) // 4)
+            
+            print(f">>> CONTEXT INFLATION: ACTIVE (Padded for ~8k tokens - Reliable Safe Zone)")
+        # ---------------------------------------------------------
+        
+        return instruction
 
     @property
     def session_service(self):
@@ -95,12 +121,36 @@ class ServiceManager:
             self._root_agent = self._init_agent()
         return self._root_agent
 
+    @property
+    def adk_app(self):
+        """Lazy-loads and returns the ADK App."""
+        if self._app is None:
+            cache_config = None
+            if settings.enable_caching:
+                # We set min_tokens=0 to allow ADK to try caching regardless of size estimation.
+                cache_config = ContextCacheConfig(
+                    ttl_seconds=3600,  # 60 minutes
+                    min_tokens=0       # Enable for all sizes (though API may still enforce limits)
+                )
+                print(f">>> CONTEXT CACHING: ENABLED (Raw env value: {settings.enable_caching})")
+            else:
+                print(f">>> CONTEXT CACHING: DISABLED (Raw env value: {settings.enable_caching})")
+            
+            self._app = App(
+                name="app",
+                root_agent=self.root_agent,
+                context_cache_config=cache_config
+            )
+        return self._app
+
 # Create a single, module-level instance of the service manager.
 # This avoids global variables for each service and centralizes initialization.
 _service_manager = ServiceManager()
 
-def get_agent():
-    """Returns the root agent instance from the manager (lazy-loaded)."""
-    return _service_manager.root_agent
+def get_adk_app():
+    """Returns the app instance from the manager (lazy-loaded)."""
+    return _service_manager.adk_app
 
-root_agent = get_agent()
+# Expose the app for ADK (and other tools)
+# App is a container which contains the root agent , Caching Config, Session Service, Memory Service, Artifact Service
+app = get_adk_app()

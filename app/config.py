@@ -21,12 +21,13 @@ class AppSettings(BaseSettings):
     google_cloud_location: str = Field("global", validation_alias="GOOGLE_CLOUD_LOCATION")
     app_name: str = Field("app", validation_alias="APP_NAME")
     max_history_turns: int = Field(15, validation_alias="MAX_HISTORY_TURNS")
-    enable_sliding_window_task: bool = Field(True, validation_alias="ENABLE_SLIDING_WINDOW_TASK")
+    enable_sliding_window_task: bool = Field(False, validation_alias="ENABLE_SLIDING_WINDOW_TASK")
     enable_sliding_window: bool = Field(True, validation_alias="ENABLE_SLIDING_WINDOW")
     enable_storage_inspector: bool = Field(True, validation_alias="ENABLE_STORAGE_INSPECTOR")
     enable_memory_inspector: bool = Field(True, validation_alias="ENABLE_MEMORY_INSPECTOR")
     enforce_hard_limit: bool = Field(False, validation_alias="ENFORCE_HARD_LIMIT")
-
+    inflate_context: bool = Field(False, validation_alias="INFLATE_CONTEXT")
+    enable_caching: bool = Field(False,validation_alias="ENABLE_CACHING")
 
     banned_words: list[str] = Field(
         default=["dominoes", "pizza hut", "papa johns"],

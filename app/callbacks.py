@@ -6,6 +6,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.genai import types as genai_types
 from .config import settings
 import json
+import os
 
 # Define as a module-level constant so it's easy to update and idempotency-guard against
 DETERMINISM_DIRECTIVE = "\n\n[System directive: Answer concisely and strictly based on the menu context.]"
@@ -261,6 +262,50 @@ async def after_model_callback(
 ) -> Optional[LlmResponse]:
     if not llm_response.content or not llm_response.content.parts:
         return None
+
+    ################################
+    # Start of context caching task
+    ################################
+    if settings.enable_caching:
+    
+        # ---- start of cache reporting ----
+        # Access usage directly from LlmResponse (ADK standard)
+        usage = llm_response.usage_metadata
+        cache = llm_response.cache_metadata
+        padding_tokens = os.getenv("DEMO_PADDING_TOKENS", "0")
+        
+        if usage:
+            print("="*40, flush=True)
+            print("       LIVE TOKEN USAGE       ", flush=True)
+            print("="*40, flush=True)
+            print(f"Total Sent:    {usage.prompt_token_count}", flush=True)
+            print(f"PADDED TOKENS: {padding_tokens} (approx)", flush=True)
+            
+            # Check both the standard snake_case and common attributes, handle None safely
+            cached_val = getattr(usage, 'cached_content_token_count', 0)
+            cached_count = cached_val if cached_val is not None else 0
+            
+            print(f"CACHED:        {cached_count}", flush=True)
+            print(f"Response:      {usage.candidates_token_count}", flush=True)
+            
+            if cache:
+                print(f"Cache Name:    {cache.cache_name or 'Fingerprint-only'}", flush=True)
+                print(f"Used Before:   {cache.invocations_used}", flush=True)
+                
+            print("="*40 + "\n", flush=True)
+
+            # Inject into UI via custom_metadata
+            if llm_response.custom_metadata is None:
+                llm_response.custom_metadata = {}
+            llm_response.custom_metadata["_demo_inflation_stats"] = {
+                "padding_tokens_added": padding_tokens,
+                "is_cached": int(cached_count) > 0
+            }
+        else:
+            print("[ADK CALLBACK] No usage_metadata found in LlmResponse.", flush=True)
+    ################################
+    # end of context caching task
+    ################################
 
     text_part = next(
         (p for p in llm_response.content.parts if p.text is not None), None
