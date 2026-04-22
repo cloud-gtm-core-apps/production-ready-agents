@@ -307,6 +307,76 @@ async def after_model_callback(
     # end of context caching task
     ################################
 
+    ################################
+    # Start of context compaction task
+    ################################
+    if settings.enable_compaction:
+        # Access usage directly from LlmResponse (ADK standard)
+        usage = llm_response.usage_metadata
+        cache = llm_response.cache_metadata
+        padding_tokens = os.getenv("DEMO_PADDING_TOKENS", "0")
+        
+        if usage:
+            print("="*40, flush=True)
+            print("       LIVE TOKEN USAGE       ", flush=True)
+            print("="*40, flush=True)
+            print(f"Total Sent:    {usage.prompt_token_count}", flush=True)
+            print(f"PADDED TOKENS: {padding_tokens} (approx)", flush=True)
+            
+            cached_count = getattr(usage, 'cached_content_token_count', 0) or 0
+            print(f"CACHED:        {cached_count}", flush=True)
+            print(f"Response:      {usage.candidates_token_count}", flush=True)
+            print("="*40 + "\n", flush=True)
+
+            # --- UI INJECTION ---
+            if llm_response.custom_metadata is None:
+                llm_response.custom_metadata = {}
+                
+            # Check context health (summaries vs raw)
+            session = callback_context.session
+            latest_summary = None
+            for event in reversed(session.events):
+                if event.actions and event.actions.compaction and event.actions.compaction.compacted_content:
+                    latest_summary = event.actions.compaction.compacted_content.parts[0].text
+                    break
+
+            compaction_just_happened = any(e.actions and e.actions.compaction for e in session.events[-3:])
+
+            llm_response.custom_metadata.update({
+                "CONTEXT_OPTIMIZATION_STATS": {
+                    "status": "active",
+                    "total_prompt_tokens": usage.prompt_token_count,
+                    "cached_tokens": cached_count,
+                    "response_tokens": usage.candidates_token_count,
+                    "padding_applied": padding_tokens,
+                    "context_compaction_active": compaction_just_happened,
+                    "latest_summary": latest_summary[:1000] if latest_summary else "No summary yet"
+                }
+            })
+
+            # --- LOG FULL EFFECTIVE CONTEXT TO CONSOLE ---
+            print("-" * 40, flush=True)
+            print("     FULL EFFECTIVE CONTEXT (View from Agent)", flush=True)
+            print("-" * 40, flush=True)
+            if latest_summary:
+                print(f"[SUMMARIZED HISTORY]: {latest_summary}", flush=True)
+            else:
+                print("[SUMMARIZED HISTORY]: None", flush=True)
+            
+            # Log the last 2 raw messages for context
+            print("\n[RECENT RAW MESSAGES]:", flush=True)
+            for e in session.events[-4:]:
+                if not (e.actions and e.actions.compaction) and e.content:
+                    # Use getattr to safely handle cases where .text might be missing from the part
+                    text = e.content.parts[0].text if (e.content.parts and e.content.parts[0].text) else ""
+                    print(f" - {e.author}: {text[:100]}...", flush=True)
+            print("-" * 40 + "\n", flush=True)
+        else:
+            print("[ADK CALLBACK] No usage_metadata found in LlmResponse.", flush=True)
+    ################################
+    # End of context compaction task
+    ################################
+
     text_part = next(
         (p for p in llm_response.content.parts if p.text is not None), None
     )

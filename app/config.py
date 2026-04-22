@@ -28,6 +28,7 @@ class AppSettings(BaseSettings):
     enforce_hard_limit: bool = Field(False, validation_alias="ENFORCE_HARD_LIMIT")
     inflate_context: bool = Field(False, validation_alias="INFLATE_CONTEXT")
     enable_caching: bool = Field(False,validation_alias="ENABLE_CACHING")
+    enable_compaction: bool = Field(False, validation_alias="ENABLE_COMPACTION")
 
     banned_words: list[str] = Field(
         default=["dominoes", "pizza hut", "papa johns"],

@@ -13,6 +13,40 @@ from .schemas import OrderSummaryResult
 from .callbacks import before_model_callback, after_model_callback
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps import App
+from google.adk.apps.app import EventsCompactionConfig
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
+
+class LoggingLlmEventSummarizer(LlmEventSummarizer):
+    """A summarizer that logs to the console when it triggers."""
+    def __init__(self, llm):
+        print(f"[ADK COMPACTION] Summarizer Initialized with model: {llm.model}", flush=True)
+        super().__init__(llm=llm)
+
+    async def maybe_summarize_events(self, *, events):
+        print(f"\n[ADK COMPACTION] --- TRIGGERED ---", flush=True)
+        print(f"[ADK COMPACTION] Input: {len(events)} events to condense.", flush=True)
+        try:
+            result = await super().maybe_summarize_events(events=events)
+            
+            # --- DEFENSIVE VALIDATION ---
+            # Ensure the summary isn't empty to avoid "model output must contain text" errors
+            is_valid = False
+            if result and result.actions and result.actions.compaction:
+                content = result.actions.compaction.compacted_content
+                if content.parts and any(p.text and p.text.strip() for p in content.parts):
+                    is_valid = True
+
+            if is_valid:
+                summary_text = result.actions.compaction.compacted_content.parts[0].text
+                print(f"[ADK COMPACTION] --- SUCCESS --- Summary created ({len(summary_text)} chars).", flush=True)
+                print(f"[ADK COMPACTION] Content Preview: {summary_text[:500]}...", flush=True)
+                return result
+            else:
+                print("[ADK COMPACTION] --- SKIP --- Summary was empty or invalid.", flush=True)
+                return None
+        except Exception as e:
+            print(f"[ADK COMPACTION] --- ERROR --- {e}", flush=True)
+            return None # Fallback: don't break the conversation if summarization fail
 
 class ServiceManager:
     """A centralized manager for agent-related services."""
@@ -135,11 +169,31 @@ class ServiceManager:
                 print(f">>> CONTEXT CACHING: ENABLED (Raw env value: {settings.enable_caching})")
             else:
                 print(f">>> CONTEXT CACHING: DISABLED (Raw env value: {settings.enable_caching})")
-            
+
+            compaction_config = None
+            if settings.enable_compaction:
+                print(">>> CONTEXT COMPACTION: ENABLED", flush=True)
+                
+                # Dedicated NON-STREAMING model for the summarizer to prevent empty response errors
+                summarizer_model = Gemini(
+                    model=settings.model.model_name,
+                    stream=False
+                )
+                summarizer = LoggingLlmEventSummarizer(llm=summarizer_model)
+                
+                compaction_config = EventsCompactionConfig(
+                    summarizer=summarizer,
+                    compaction_interval=2,  # Aggressive: trigger after 2 turns
+                    overlap_size=0
+                )
+            else:
+                print(">>> CONTEXT COMPACTION: DISABLED", flush=True)
+
             self._app = App(
                 name="app",
                 root_agent=self.root_agent,
-                context_cache_config=cache_config
+                context_cache_config=cache_config,
+                events_compaction_config=compaction_config
             )
         return self._app
 
